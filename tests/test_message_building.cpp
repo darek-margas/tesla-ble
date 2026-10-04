@@ -392,6 +392,35 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple("setCopTempAction_High", CarServer_VehicleAction_setCopTempAction_tag, 3)),
     [](const ::testing::TestParamInfo<VehicleActionNumericTest::ParamType> &info) { return std::get<0>(info.param); });
 
+TEST_F(MessageBuildingTest, ScheduledDepartureBuildsAndValidatesTimes) {
+  pb_byte_t buffer[UniversalMessage_RoutableMessage_size];
+  size_t length = 0;
+  CarServer_ScheduledDepartureAction departure = CarServer_ScheduledDepartureAction_init_default;
+  departure.enabled = true;
+  departure.departure_time = 7 * 60 + 30;
+  departure.off_peak_hours_end_time = 6 * 60;
+  departure.has_preconditioning_times = true;
+  departure.preconditioning_times.which_times = CarServer_PreconditioningTimes_weekdays_tag;
+  departure.has_off_peak_charging_times = true;
+  departure.off_peak_charging_times.which_times = CarServer_OffPeakChargingTimes_all_week_tag;
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(
+                buffer, &length, CarServer_VehicleAction_scheduledDepartureAction_tag, &departure),
+            TeslaBLE_Status_E_OK);
+  EXPECT_GT(length, 0);
+
+  CarServer_ScheduledDepartureAction disable = CarServer_ScheduledDepartureAction_init_default;
+  length = 0;
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(
+                buffer, &length, CarServer_VehicleAction_scheduledDepartureAction_tag, &disable),
+            TeslaBLE_Status_E_OK);
+
+  departure.departure_time = 24 * 60;
+  length = 0;
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(
+                buffer, &length, CarServer_VehicleAction_scheduledDepartureAction_tag, &departure),
+            TeslaBLE_Status_E_ERROR_INVALID_PARAMS);
+}
+
 TEST_F(MessageBuildingTest, SetCopTempRejectsOutOfRangeLevels) {
   pb_byte_t buffer[UniversalMessage_RoutableMessage_size];
   for (int32_t level : {0, 4, -1}) {

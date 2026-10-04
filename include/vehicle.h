@@ -252,6 +252,9 @@ class Vehicle {
   void set_keep_accessory_power_mode(bool enable);
   void set_guest_mode(bool enable);
   void set_cabin_overheat_protection_temp(int level);  // 1=Low, 2=Medium, 3=High
+  // Times in minutes after midnight; policies 0=Off, 1=All week, 2=Weekdays
+  void set_scheduled_departure(bool enabled, int departure_minutes, int preconditioning_policy, int off_peak_policy,
+                               int off_peak_end_minutes);
   void vent_windows();
   void close_windows();
 

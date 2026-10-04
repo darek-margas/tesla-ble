@@ -1447,6 +1447,30 @@ void TeslaBLE::Vehicle::set_cabin_overheat_protection_temp(int level) {
                             CarServer_VehicleAction_setCopTempAction_tag, static_cast<int32_t>(level));
 }
 
+void TeslaBLE::Vehicle::set_scheduled_departure(bool enabled, int departure_minutes, int preconditioning_policy,
+                                                int off_peak_policy, int off_peak_end_minutes) {
+  CarServer_ScheduledDepartureAction departure = CarServer_ScheduledDepartureAction_init_default;
+  departure.enabled = enabled;
+  if (enabled) {
+    departure.departure_time = departure_minutes;
+    departure.off_peak_hours_end_time = off_peak_end_minutes;
+    if (preconditioning_policy == 1 || preconditioning_policy == 2) {
+      departure.has_preconditioning_times = true;
+      departure.preconditioning_times.which_times = preconditioning_policy == 1
+                                                        ? CarServer_PreconditioningTimes_all_week_tag
+                                                        : CarServer_PreconditioningTimes_weekdays_tag;
+    }
+    if (off_peak_policy == 1 || off_peak_policy == 2) {
+      departure.has_off_peak_charging_times = true;
+      departure.off_peak_charging_times.which_times = off_peak_policy == 1
+                                                          ? CarServer_OffPeakChargingTimes_all_week_tag
+                                                          : CarServer_OffPeakChargingTimes_weekdays_tag;
+    }
+  }
+  send_infotainment_action_(enabled ? "Scheduled Departure On" : "Scheduled Departure Off",
+                            CarServer_VehicleAction_scheduledDepartureAction_tag, departure);
+}
+
 void TeslaBLE::Vehicle::vent_windows() {
   send_infotainment_action_("Vent Windows", CarServer_VehicleAction_vehicleControlWindowAction_tag, 0);
 }
