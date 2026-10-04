@@ -55,7 +55,9 @@ const std::unordered_map<pb_size_t, VehicleActionBuilder::BuilderFunction> &Vehi
        build_vehicle_control_schedule_software_update},
       {CarServer_VehicleAction_setCabinOverheatProtectionAction_tag, build_set_cabin_overheat_protection},
       {CarServer_VehicleAction_setLowPowerModeAction_tag, build_set_low_power_mode},
-      {CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, build_set_keep_accessory_power_mode}};
+      {CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, build_set_keep_accessory_power_mode},
+      {CarServer_VehicleAction_guestModeAction_tag, build_set_guest_mode},
+      {CarServer_VehicleAction_setCopTempAction_tag, build_set_cop_temp}};
   return BUILDERS;
 }
 
@@ -381,6 +383,34 @@ int VehicleActionBuilder::build_set_keep_accessory_power_mode(CarServer_VehicleA
 
   action.vehicle_action_msg.setKeepAccessoryPowerModeAction = CarServer_SetKeepAccessoryPowerModeAction_init_default;
   action.vehicle_action_msg.setKeepAccessoryPowerModeAction.keep_accessory_power_mode = *enabled;
+  return TeslaBLE_Status_E_OK;
+}
+
+int VehicleActionBuilder::build_set_guest_mode(CarServer_VehicleAction &action, const void *data) {
+  const bool *enabled = require_data<bool>(data, "Set guest mode action requires boolean data");
+  if (!enabled) {
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+
+  action.vehicle_action_msg.guestModeAction = CarServer_VehicleState_GuestMode_init_default;
+  action.vehicle_action_msg.guestModeAction.GuestModeActive = *enabled;
+  return TeslaBLE_Status_E_OK;
+}
+
+int VehicleActionBuilder::build_set_cop_temp(CarServer_VehicleAction &action, const void *data) {
+  const int32_t *level = require_data<int32_t>(data, "Set cabin overheat protection temperature requires int32_t data");
+  if (!level) {
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+  if (*level < CarServer_ClimateState_CopActivationTemp_CopActivationTempLow ||
+      *level > CarServer_ClimateState_CopActivationTemp_CopActivationTempHigh) {
+    LOG_ERROR("Invalid cabin overheat protection temperature level: %d", static_cast<int>(*level));
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+
+  action.vehicle_action_msg.setCopTempAction = CarServer_SetCopTempAction_init_default;
+  action.vehicle_action_msg.setCopTempAction.copActivationTemp =
+      static_cast<CarServer_ClimateState_CopActivationTemp>(*level);
   return TeslaBLE_Status_E_OK;
 }
 
