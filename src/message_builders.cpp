@@ -45,6 +45,7 @@ const std::unordered_map<pb_size_t, VehicleActionBuilder::BuilderFunction> &Vehi
       {CarServer_VehicleAction_mediaPreviousFavorite_tag, build_media_previous_favorite},
       {CarServer_VehicleAction_mediaNextTrack_tag, build_media_next_track},
       {CarServer_VehicleAction_mediaPreviousTrack_tag, build_media_previous_track},
+      {CarServer_VehicleAction_mediaUpdateVolume_tag, build_media_update_volume},
       {CarServer_VehicleAction_ping_tag, build_ping_action},
       {CarServer_VehicleAction_vehicleControlWindowAction_tag, build_vehicle_control_window_action},
       {CarServer_VehicleAction_hvacSetPreconditioningMaxAction_tag, build_hvac_set_preconditioning_max},
@@ -242,6 +243,28 @@ int VehicleActionBuilder::build_media_next_track(CarServer_VehicleAction &action
 
 int VehicleActionBuilder::build_media_previous_track(CarServer_VehicleAction &action, const void *data) {
   action.vehicle_action_msg.mediaPreviousTrack = CarServer_MediaPreviousTrack_init_default;
+  return TeslaBLE_Status_E_OK;
+}
+
+int VehicleActionBuilder::build_media_update_volume(CarServer_VehicleAction &action, const void *data) {
+  const CarServer_MediaUpdateVolume *volume =
+      require_data<CarServer_MediaUpdateVolume>(data, "Media volume action requires CarServer_MediaUpdateVolume data");
+  if (!volume) {
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+  // As vehicle-command SetVolume (absolute, 0-10) / VolumeUp / VolumeDown (delta)
+  if (volume->which_media_volume == CarServer_MediaUpdateVolume_volume_absolute_float_tag) {
+    float level = volume->media_volume.volume_absolute_float;
+    if (!(level >= 0.0f && level <= 10.0f)) {
+      LOG_ERROR("Invalid media volume: %.2f (must be 0-10)", static_cast<double>(level));
+      return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+    }
+  } else if (volume->which_media_volume != CarServer_MediaUpdateVolume_volume_delta_tag) {
+    LOG_ERROR("Media update volume action needs an absolute volume or a delta");
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+
+  action.vehicle_action_msg.mediaUpdateVolume = *volume;
   return TeslaBLE_Status_E_OK;
 }
 

@@ -15,6 +15,27 @@
 
 namespace TeslaBLE {
 /**
+ * @brief Now-playing text of CarServer.MediaState
+ *
+ * The generated MediaState keeps artist and title as callbacks (unbounded strings),
+ * so pb_decode skips them. They are read from the raw CarServer.Response instead,
+ * truncated to MAX_LENGTH bytes on a UTF-8 character boundary.
+ */
+struct MediaNowPlaying {
+  static constexpr size_t MAX_LENGTH = 128;
+  bool has_artist = false;
+  bool has_title = false;
+  std::string artist;
+  std::string title;
+};
+
+/**
+ * @brief Read the now-playing artist and title from an encoded CarServer.Response
+ * (vehicleData.media_state). Returns false if the response has no media state.
+ */
+bool extract_media_now_playing(const pb_byte_t *response, size_t length, MediaNowPlaying *output);
+
+/**
  * @brief Main client class for Tesla BLE communication
  *
  * This class provides a high-level interface for communicating with Tesla vehicles
@@ -104,7 +125,8 @@ class Client {
   int parse_payload_car_server_response(UniversalMessage_RoutableMessage_protobuf_message_as_bytes_t *input_buffer,
                                         Signatures_SignatureData *signature_data, pb_size_t which_sub_sig_data,
                                         UniversalMessage_MessageFault_E signed_message_fault, uint32_t response_flags,
-                                        CarServer_Response *output, uint32_t *response_counter = nullptr);
+                                        CarServer_Response *output, uint32_t *response_counter = nullptr,
+                                        MediaNowPlaying *media_now_playing = nullptr);
 
   const pb_byte_t *get_last_request_hash(size_t *length) const;
   bool get_last_request_uuid(UniversalMessage_Domain domain, pb_byte_t *uuid, size_t *uuid_length) const;

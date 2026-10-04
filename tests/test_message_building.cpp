@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <client.h>
 #include <cstring>
+#include <limits>
 #include <universal_message.pb.h>
 #include <vcsec.pb.h>
 #include <signatures.pb.h>
@@ -456,6 +457,50 @@ TEST_F(MessageBuildingTest, ScheduledDepartureBuildsAndValidatesTimes) {
   length = 0;
   EXPECT_EQ(client->build_car_server_vehicle_action_message(
                 buffer, &length, CarServer_VehicleAction_scheduledDepartureAction_tag, &departure),
+            TeslaBLE_Status_E_ERROR_INVALID_PARAMS);
+}
+
+TEST_F(MessageBuildingTest, MediaUpdateVolumeBuildsAndValidates) {
+  pb_byte_t buffer[UniversalMessage_RoutableMessage_size];
+  size_t length = 0;
+  CarServer_MediaUpdateVolume volume = CarServer_MediaUpdateVolume_init_default;
+
+  volume.which_media_volume = CarServer_MediaUpdateVolume_volume_delta_tag;
+  for (int32_t delta : {1, -1}) {
+    volume.media_volume.volume_delta = delta;
+    length = 0;
+    EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                              CarServer_VehicleAction_mediaUpdateVolume_tag, &volume),
+              TeslaBLE_Status_E_OK)
+        << "delta " << delta;
+    EXPECT_GT(length, 0);
+  }
+
+  volume.which_media_volume = CarServer_MediaUpdateVolume_volume_absolute_float_tag;
+  for (float level : {0.0f, 5.5f, 10.0f}) {
+    volume.media_volume.volume_absolute_float = level;
+    length = 0;
+    EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                              CarServer_VehicleAction_mediaUpdateVolume_tag, &volume),
+              TeslaBLE_Status_E_OK)
+        << "level " << level;
+  }
+  for (float level : {-0.5f, 10.5f, std::numeric_limits<float>::quiet_NaN()}) {
+    volume.media_volume.volume_absolute_float = level;
+    length = 0;
+    EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                              CarServer_VehicleAction_mediaUpdateVolume_tag, &volume),
+              TeslaBLE_Status_E_ERROR_INVALID_PARAMS)
+        << "level " << level << " should be rejected";
+  }
+
+  CarServer_MediaUpdateVolume empty = CarServer_MediaUpdateVolume_init_default;
+  length = 0;
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                            CarServer_VehicleAction_mediaUpdateVolume_tag, &empty),
+            TeslaBLE_Status_E_ERROR_INVALID_PARAMS);
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                            CarServer_VehicleAction_mediaUpdateVolume_tag, nullptr),
             TeslaBLE_Status_E_ERROR_INVALID_PARAMS);
 }
 

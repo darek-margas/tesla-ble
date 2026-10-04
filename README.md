@@ -1,6 +1,6 @@
 # TeslaBLE - A C++ library for communicating with Tesla vehicles over BLE
 
-> **darek-margas fork.** The `multicar` branch is upstream plus scheduled departure, guest mode and cabin overheat protection temperature actions, used by [esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi). The tags are `v5.2.0-dm.N`. See [the fork release notes](.github/fork-release-notes.md). `main` mirrors upstream.
+> **darek-margas fork.** The `multicar` branch is upstream plus media controls and media state, scheduled departure, guest mode and cabin overheat protection temperature actions, used by [esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi). The tags are `v5.2.0-dm.N`. See [the fork release notes](.github/fork-release-notes.md). `main` mirrors upstream.
 
 This library is designed to communicate with Tesla vehicles locally via the BLE API. It follows the same principles as the official Tesla [vehicle-command](https://github.com/teslamotors/vehicle-command) library (Golang), and is intended for use in embedded systems.
 

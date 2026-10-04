@@ -203,6 +203,10 @@ class Vehicle {
   void set_closures_state_callback(std::function<void(const CarServer_ClosuresState &)> cb) {
     closures_state_callback_ = std::move(cb);
   }
+  // Artist and title are not in the generated MediaState (unbounded strings); they come as MediaNowPlaying
+  void set_media_state_callback(std::function<void(const CarServer_MediaState &, const MediaNowPlaying &)> cb) {
+    media_state_callback_ = std::move(cb);
+  }
 
   void wake();
   void vcsec_poll();
@@ -218,6 +222,9 @@ class Vehicle {
   void closures_state_poll(WakePolicy wake_policy);
   void tire_pressure_poll(bool force_wake = false);
   void tire_pressure_poll(WakePolicy wake_policy);
+  // Not part of infotainment_poll(): media state is only useful while someone listens
+  void media_state_poll(bool force_wake = false);
+  void media_state_poll(WakePolicy wake_policy);
 
   void set_charging_state(bool enable);
   void set_charging_amps(int amps);
@@ -255,6 +262,16 @@ class Vehicle {
                                int off_peak_end_minutes);
   void vent_windows();
   void close_windows();
+
+  // Media controls (infotainment)
+  void media_toggle_playback();
+  void media_next_track();
+  void media_previous_track();
+  void media_next_favorite();
+  void media_previous_favorite();
+  void media_volume_up();
+  void media_volume_down();
+  void set_media_volume(float volume);  // 0-10, as vehicle-command SetVolume
 
   // Pairing & Auth
   void pair(Keys_Role role = Keys_Role_ROLE_OWNER);
@@ -309,6 +326,7 @@ class Vehicle {
   std::function<void(const CarServer_DriveState &)> drive_state_callback_;
   std::function<void(const CarServer_TirePressureState &)> tire_pressure_callback_;
   std::function<void(const CarServer_ClosuresState &)> closures_state_callback_;
+  std::function<void(const CarServer_MediaState &, const MediaNowPlaying &)> media_state_callback_;
 
   bool is_connected_ = false;
   SleepState sleep_state_ = SleepState::UNKNOWN;

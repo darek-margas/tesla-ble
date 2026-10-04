@@ -47,6 +47,7 @@ class VehicleActionBuilder {
   static int build_media_previous_favorite(CarServer_VehicleAction &action, const void *data);
   static int build_media_next_track(CarServer_VehicleAction &action, const void *data);
   static int build_media_previous_track(CarServer_VehicleAction &action, const void *data);
+  static int build_media_update_volume(CarServer_VehicleAction &action, const void *data);
   static int build_ping_action(CarServer_VehicleAction &action, const void *data);
   static int build_vehicle_control_window_action(CarServer_VehicleAction &action, const void *data);
   static int build_hvac_set_preconditioning_max(CarServer_VehicleAction &action, const void *data);
