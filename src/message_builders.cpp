@@ -57,7 +57,8 @@ const std::unordered_map<pb_size_t, VehicleActionBuilder::BuilderFunction> &Vehi
       {CarServer_VehicleAction_setLowPowerModeAction_tag, build_set_low_power_mode},
       {CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, build_set_keep_accessory_power_mode},
       {CarServer_VehicleAction_guestModeAction_tag, build_set_guest_mode},
-      {CarServer_VehicleAction_setCopTempAction_tag, build_set_cop_temp}};
+      {CarServer_VehicleAction_setCopTempAction_tag, build_set_cop_temp},
+      {CarServer_VehicleAction_scheduledDepartureAction_tag, build_scheduled_departure}};
   return BUILDERS;
 }
 
@@ -411,6 +412,24 @@ int VehicleActionBuilder::build_set_cop_temp(CarServer_VehicleAction &action, co
   action.vehicle_action_msg.setCopTempAction = CarServer_SetCopTempAction_init_default;
   action.vehicle_action_msg.setCopTempAction.copActivationTemp =
       static_cast<CarServer_ClimateState_CopActivationTemp>(*level);
+  return TeslaBLE_Status_E_OK;
+}
+
+int VehicleActionBuilder::build_scheduled_departure(CarServer_VehicleAction &action, const void *data) {
+  const CarServer_ScheduledDepartureAction *departure = require_data<CarServer_ScheduledDepartureAction>(
+      data, "Scheduled departure action requires CarServer_ScheduledDepartureAction data");
+  if (!departure) {
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+  constexpr int32_t MINUTES_PER_DAY = 24 * 60;
+  if (departure->enabled &&
+      (departure->departure_time < 0 || departure->departure_time >= MINUTES_PER_DAY ||
+       departure->off_peak_hours_end_time < 0 || departure->off_peak_hours_end_time >= MINUTES_PER_DAY)) {
+    LOG_ERROR("Scheduled departure times must be minutes after midnight (0-1439)");
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+
+  action.vehicle_action_msg.scheduledDepartureAction = *departure;
   return TeslaBLE_Status_E_OK;
 }
 
