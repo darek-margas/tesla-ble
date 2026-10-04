@@ -1,0 +1,47 @@
+name: Fork release
+
+# Releases of the darek-margas fork, from branch "multicar" only.
+# Bump FORK_VERSION (e.g. 5.2.0-dm.2) and update .github/fork-release-notes.md;
+# the push runs the tests and, if they pass, creates tag v<FORK_VERSION> and
+# a GitHub release. VERSION stays the upstream version (CMake needs X.Y.Z).
+
+on:
+  push:
+    branches: [multicar]
+    paths: [FORK_VERSION]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update -q && sudo apt-get install -y -q protobuf-compiler
+      - name: Build
+        run: cmake -B build -DCMAKE_MESSAGE_LOG_LEVEL=ERROR && cmake --build build -j
+      - name: Test
+        run: cd build && ctest -j --output-on-failure
+
+  release:
+    needs: test
+    if: github.ref_name == 'multicar'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(tr -d '[:space:]' < FORK_VERSION)"
+          test -n "$VERSION"
+          TAG="v$VERSION"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "tesla-ble fork $TAG" --notes-file .github/fork-release-notes.md
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "tesla-ble fork $TAG" \
+              --notes-file .github/fork-release-notes.md
+          fi
