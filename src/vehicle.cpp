@@ -952,11 +952,12 @@ void TeslaBLE::Vehicle::handle_carserver_message_(const UniversalMessage_Routabl
   }
   CarServer_Response response = CarServer_Response_init_default;
   uint32_t response_counter = 0;
+  MediaNowPlaying now_playing;
   int result = client_->parse_payload_car_server_response(
       const_cast<UniversalMessage_RoutableMessage_protobuf_message_as_bytes_t *>(
           &msg.payload.protobuf_message_as_bytes),
       const_cast<Signatures_SignatureData *>(sig_data), msg.which_sub_sigData, fault, msg.flags, &response,
-      &response_counter);
+      &response_counter, media_state_callback_ ? &now_playing : nullptr);
   if (result != 0) {
     LOG_ERROR("Failed to parse CarServer response: %d", result);
     return;
@@ -980,6 +981,9 @@ void TeslaBLE::Vehicle::handle_carserver_message_(const UniversalMessage_Routabl
     emit_if(vd.has_drive_state, drive_state_callback_, vd.drive_state);
     emit_if(vd.has_tire_pressure_state, tire_pressure_callback_, vd.tire_pressure_state);
     emit_if(vd.has_closures_state, closures_state_callback_, vd.closures_state);
+    if (vd.has_media_state && media_state_callback_) {
+      media_state_callback_(vd.media_state, now_playing);
+    }
   }
   auto cmd = peek_command_();
   if (cmd && cmd->domain == UniversalMessage_Domain_DOMAIN_INFOTAINMENT &&
@@ -1278,6 +1282,12 @@ void TeslaBLE::Vehicle::tire_pressure_poll(WakePolicy wake_policy) {
   send_infotainment_poll_("Tire Pressure Poll", CarServer_GetVehicleData_getTirePressureState_tag, wake_policy);
 }
 
+void TeslaBLE::Vehicle::media_state_poll(bool force_wake) { media_state_poll(wake_policy_from_bool(force_wake)); }
+
+void TeslaBLE::Vehicle::media_state_poll(WakePolicy wake_policy) {
+  send_infotainment_poll_("Media State Poll", CarServer_GetVehicleData_getMediaState_tag, wake_policy);
+}
+
 void TeslaBLE::Vehicle::set_charging_state(bool enable) {
   send_infotainment_action_(enable ? "Start Charging" : "Stop Charging",
                             CarServer_VehicleAction_chargingStartStopAction_tag, enable);
@@ -1477,6 +1487,51 @@ void TeslaBLE::Vehicle::vent_windows() {
 
 void TeslaBLE::Vehicle::close_windows() {
   send_infotainment_action_("Close Windows", CarServer_VehicleAction_vehicleControlWindowAction_tag, 1);
+}
+
+void TeslaBLE::Vehicle::media_toggle_playback() {
+  send_infotainment_action_("Media Toggle Playback", CarServer_VehicleAction_mediaPlayAction_tag);
+}
+
+void TeslaBLE::Vehicle::media_next_track() {
+  send_infotainment_action_("Media Next Track", CarServer_VehicleAction_mediaNextTrack_tag);
+}
+
+void TeslaBLE::Vehicle::media_previous_track() {
+  send_infotainment_action_("Media Previous Track", CarServer_VehicleAction_mediaPreviousTrack_tag);
+}
+
+void TeslaBLE::Vehicle::media_next_favorite() {
+  send_infotainment_action_("Media Next Favorite", CarServer_VehicleAction_mediaNextFavorite_tag);
+}
+
+void TeslaBLE::Vehicle::media_previous_favorite() {
+  send_infotainment_action_("Media Previous Favorite", CarServer_VehicleAction_mediaPreviousFavorite_tag);
+}
+
+void TeslaBLE::Vehicle::media_volume_up() {
+  CarServer_MediaUpdateVolume volume = CarServer_MediaUpdateVolume_init_default;
+  volume.which_media_volume = CarServer_MediaUpdateVolume_volume_delta_tag;
+  volume.media_volume.volume_delta = 1;
+  send_infotainment_action_("Media Volume Up", CarServer_VehicleAction_mediaUpdateVolume_tag, volume);
+}
+
+void TeslaBLE::Vehicle::media_volume_down() {
+  CarServer_MediaUpdateVolume volume = CarServer_MediaUpdateVolume_init_default;
+  volume.which_media_volume = CarServer_MediaUpdateVolume_volume_delta_tag;
+  volume.media_volume.volume_delta = -1;
+  send_infotainment_action_("Media Volume Down", CarServer_VehicleAction_mediaUpdateVolume_tag, volume);
+}
+
+void TeslaBLE::Vehicle::set_media_volume(float level) {
+  if (!(level >= 0.0f && level <= 10.0f)) {
+    LOG_ERROR("Invalid media volume: %.2f (must be 0-10)", static_cast<double>(level));
+    return;
+  }
+  CarServer_MediaUpdateVolume volume = CarServer_MediaUpdateVolume_init_default;
+  volume.which_media_volume = CarServer_MediaUpdateVolume_volume_absolute_float_tag;
+  volume.media_volume.volume_absolute_float = level;
+  send_infotainment_action_("Set Media Volume", CarServer_VehicleAction_mediaUpdateVolume_tag, volume);
 }
 
 // =============================================================================

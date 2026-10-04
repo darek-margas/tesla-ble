@@ -7,6 +7,8 @@
 #include <array>
 #include <ranges>
 #include <cstring>
+#include <string>
+#include <vector>
 #include "tb_utils.h"
 #include "test_constants.h"
 
@@ -20,6 +22,31 @@ std::array<pb_byte_t, K_MOCK_MESSAGE_SIZE> copy_mock_message(const pb_byte_t (&d
   std::array<pb_byte_t, K_MOCK_MESSAGE_SIZE> copy{};
   std::ranges::copy(data, copy.begin());
   return copy;
+}
+
+// Protobuf wire-format helpers for hand-built CarServer responses
+void append_varint(std::vector<pb_byte_t> &out, uint64_t value) {
+  while (value >= 0x80) {
+    out.push_back(static_cast<pb_byte_t>(value | 0x80));
+    value >>= 7;
+  }
+  out.push_back(static_cast<pb_byte_t>(value));
+}
+
+std::vector<pb_byte_t> length_delimited(uint32_t field, const std::vector<pb_byte_t> &body) {
+  std::vector<pb_byte_t> out;
+  append_varint(out, (static_cast<uint64_t>(field) << 3) | 2);
+  append_varint(out, body.size());
+  out.insert(out.end(), body.begin(), body.end());
+  return out;
+}
+
+std::vector<pb_byte_t> text_bytes(const std::string &text) { return {text.begin(), text.end()}; }
+
+// Response { vehicleData { media_state { <media_state> } } }
+std::vector<pb_byte_t> media_response(const std::vector<pb_byte_t> &media_state) {
+  return length_delimited(CarServer_Response_vehicleData_tag,
+                          length_delimited(CarServer_VehicleData_media_state_tag, media_state));
 }
 }  // namespace
 
@@ -167,6 +194,69 @@ TEST_F(MessageParsingTest, ParsePayloadCarServerResponsePlaintext) {
   EXPECT_TRUE(parsed_response.has_actionStatus) << "Parsed response should have action status";
   EXPECT_EQ(parsed_response.actionStatus.result, CarServer_OperationStatus_E_OPERATIONSTATUS_OK)
       << "Action status should be OK";
+}
+
+TEST_F(MessageParsingTest, ParsePayloadCarServerResponseMediaState) {
+  std::vector<pb_byte_t> media_state = {0x10, 0x01};  // remote_control_enabled: true
+  auto artist = length_delimited(CarServer_MediaState_now_playing_artist_tag, text_bytes("ABBA"));
+  auto title = length_delimited(CarServer_MediaState_now_playing_title_tag, text_bytes("Waterloo"));
+  media_state.insert(media_state.end(), artist.begin(), artist.end());
+  media_state.insert(media_state.end(), title.begin(), title.end());
+  // audio_volume (field 5, fixed32) = 3.5f, media_playback_status (field 9) = Playing
+  media_state.insert(media_state.end(), {0x2D, 0x00, 0x00, 0x60, 0x40, 0x48, 0x01});
+  auto response = media_response(media_state);
+
+  UniversalMessage_RoutableMessage_protobuf_message_as_bytes_t input_buffer;
+  ASSERT_LE(response.size(), sizeof(input_buffer.bytes));
+  input_buffer.size = response.size();
+  memcpy(input_buffer.bytes, response.data(), response.size());
+
+  CarServer_Response parsed_response = CarServer_Response_init_default;
+  Signatures_SignatureData signature_data = Signatures_SignatureData_init_default;
+  MediaNowPlaying now_playing;
+  auto result = client_->parse_payload_car_server_response(&input_buffer, &signature_data, 0,
+                                                           UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_NONE, 0,
+                                                           &parsed_response, nullptr, &now_playing);
+
+  ASSERT_EQ(result, TeslaBLE_Status_E_OK);
+  ASSERT_EQ(parsed_response.which_response_msg, CarServer_Response_vehicleData_tag);
+  const auto &media = parsed_response.response_msg.vehicleData.media_state;
+  EXPECT_TRUE(parsed_response.response_msg.vehicleData.has_media_state);
+  EXPECT_EQ(media.which_optional_audio_volume, CarServer_MediaState_audio_volume_tag);
+  EXPECT_FLOAT_EQ(media.optional_audio_volume.audio_volume, 3.5f);
+  EXPECT_EQ(media.which_optional_media_playback_status, CarServer_MediaState_media_playback_status_tag);
+  EXPECT_EQ(media.optional_media_playback_status.media_playback_status, CarServer_MediaPlaybackStatus_Playing);
+  EXPECT_TRUE(now_playing.has_artist);
+  EXPECT_EQ(now_playing.artist, "ABBA");
+  EXPECT_TRUE(now_playing.has_title);
+  EXPECT_EQ(now_playing.title, "Waterloo");
+}
+
+TEST_F(MessageParsingTest, ExtractMediaNowPlayingTruncatesOnUtf8Boundary) {
+  // 127 ASCII bytes then a 2-byte character: the cut at 128 would split it
+  std::string long_title(MediaNowPlaying::MAX_LENGTH - 1, 'x');
+  long_title += "\xC3\xA9tail";
+  auto response = media_response(length_delimited(CarServer_MediaState_now_playing_title_tag, text_bytes(long_title)));
+
+  MediaNowPlaying now_playing;
+  ASSERT_TRUE(extract_media_now_playing(response.data(), response.size(), &now_playing));
+  EXPECT_FALSE(now_playing.has_artist);
+  EXPECT_TRUE(now_playing.has_title);
+  EXPECT_EQ(now_playing.title, std::string(MediaNowPlaying::MAX_LENGTH - 1, 'x'));
+}
+
+TEST_F(MessageParsingTest, ExtractMediaNowPlayingRejectsMissingOrMalformed) {
+  MediaNowPlaying now_playing;
+  pb_byte_t action_status_only[] = {0x0A, 0x02, 0x08, 0x00};
+  EXPECT_FALSE(extract_media_now_playing(action_status_only, sizeof(action_status_only), &now_playing));
+
+  auto response = media_response(length_delimited(CarServer_MediaState_now_playing_title_tag, text_bytes("Song")));
+  for (size_t cut = 1; cut < response.size(); ++cut) {
+    // Truncated input never reads past the end; an incomplete outer field is rejected
+    extract_media_now_playing(response.data(), cut, &now_playing);
+  }
+  EXPECT_FALSE(extract_media_now_playing(response.data(), 3, &now_playing));
+  EXPECT_FALSE(extract_media_now_playing(nullptr, 0, &now_playing));
 }
 
 TEST_F(MessageParsingTest, ParsePayloadCarServerResponseInvalidData) {
