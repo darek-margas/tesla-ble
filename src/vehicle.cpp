@@ -1429,6 +1429,21 @@ void TeslaBLE::Vehicle::set_keep_accessory_power_mode(bool enable) {
                             CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, enable);
 }
 
+void TeslaBLE::Vehicle::set_guest_mode(bool enable) {
+  send_infotainment_action_(enable ? "Guest Mode On" : "Guest Mode Off", CarServer_VehicleAction_guestModeAction_tag,
+                            enable);
+}
+
+void TeslaBLE::Vehicle::set_cabin_overheat_protection_temp(int level) {
+  static const char *const NAMES[] = {"", "Low", "Medium", "High"};
+  if (level < 1 || level > 3) {
+    LOG_ERROR("Invalid cabin overheat protection temperature level: %d", level);
+    return;
+  }
+  send_infotainment_action_(std::string("Cabin Overheat Temp ") + NAMES[level],
+                            CarServer_VehicleAction_setCopTempAction_tag, static_cast<int32_t>(level));
+}
+
 void TeslaBLE::Vehicle::vent_windows() {
   send_infotainment_action_("Vent Windows", CarServer_VehicleAction_vehicleControlWindowAction_tag, 0);
 }

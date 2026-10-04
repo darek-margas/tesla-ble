@@ -394,7 +394,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple("setKeepAccessoryPowerModeAction_On",
                         CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, true),
         std::make_tuple("setKeepAccessoryPowerModeAction_Off",
-                        CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, false)),
+                        CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, false),
+        std::make_tuple("guestModeAction_On", CarServer_VehicleAction_guestModeAction_tag, true),
+        std::make_tuple("guestModeAction_Off", CarServer_VehicleAction_guestModeAction_tag, false)),
     [](const ::testing::TestParamInfo<VehicleActionBooleanTest::ParamType> &info) { return std::get<0>(info.param); });
 
 // Test numeric vehicle actions
@@ -422,16 +424,29 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple("chargingSetLimitAction_80pct", CarServer_VehicleAction_chargingSetLimitAction_tag, 80),
         std::make_tuple("chargingSetLimitAction_90pct", CarServer_VehicleAction_chargingSetLimitAction_tag, 90),
         std::make_tuple("ping_12345", CarServer_VehicleAction_ping_tag, 12345),
-        std::make_tuple("ping_99999", CarServer_VehicleAction_ping_tag, 99999)),
+        std::make_tuple("ping_99999", CarServer_VehicleAction_ping_tag, 99999),
+        std::make_tuple("setCopTempAction_Low", CarServer_VehicleAction_setCopTempAction_tag, 1),
+        std::make_tuple("setCopTempAction_Medium", CarServer_VehicleAction_setCopTempAction_tag, 2),
+        std::make_tuple("setCopTempAction_High", CarServer_VehicleAction_setCopTempAction_tag, 3)),
     [](const ::testing::TestParamInfo<VehicleActionNumericTest::ParamType> &info) { return std::get<0>(info.param); });
+
+TEST_F(MessageBuildingTest, SetCopTempRejectsOutOfRangeLevels) {
+  pb_byte_t buffer[UniversalMessage_RoutableMessage_size];
+  for (int32_t level : {0, 4, -1}) {
+    size_t length = 0;
+    auto result = client->build_car_server_vehicle_action_message(buffer, &length,
+                                                                  CarServer_VehicleAction_setCopTempAction_tag, &level);
+    EXPECT_EQ(result, TeslaBLE_Status_E_ERROR_INVALID_PARAMS) << "level " << level << " should be rejected";
+  }
+}
 
 TEST_F(MessageBuildingTest, VehicleActionCoverageReport) {
   auto all_tags = get_all_vehicle_action_tags();
 
   // Count different types of actions we're testing
   int simple_actions = 14;   // From INSTANTIATE_TEST_SUITE_P SimpleActions
-  int boolean_actions = 10;  // From INSTANTIATE_TEST_SUITE_P BooleanActions (5 actions * 2 values each)
-  int numeric_actions = 6;   // From INSTANTIATE_TEST_SUITE_P NumericActions
+  int boolean_actions = 12;  // From INSTANTIATE_TEST_SUITE_P BooleanActions (6 actions * 2 values each)
+  int numeric_actions = 9;   // From INSTANTIATE_TEST_SUITE_P NumericActions
   int tested_actions = simple_actions + boolean_actions + numeric_actions;
   int total_actions = all_tags.size();
   int skipped_actions = total_actions - tested_actions - 1;  // -1 for getVehicleData

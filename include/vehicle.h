@@ -248,6 +248,8 @@ class Vehicle {
   void set_sentry_mode(bool enable);
   void set_low_power_mode(bool enable);
   void set_keep_accessory_power_mode(bool enable);
+  void set_guest_mode(bool enable);
+  void set_cabin_overheat_protection_temp(int level);  // 1=Low, 2=Medium, 3=High
   void vent_windows();
   void close_windows();
 
