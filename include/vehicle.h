@@ -126,6 +126,13 @@ struct Command {
   std::chrono::steady_clock::time_point last_tx_at;
   uint8_t retry_count = 0;
 
+  // The encoded request as last sent. A resend after a response timeout writes
+  // these same bytes (as vehicle-command does): the car treats a repeat as a
+  // duplicate instead of a new command, so a command that did arrive (only the
+  // reply was lost) is not executed twice. Rebuilt only after a new session.
+  std::vector<uint8_t> encoded_request;
+  bool resend_encoded = false;
+
   // Error tracking for intelligent retry decisions
   std::unique_ptr<CommandError> last_error;
 

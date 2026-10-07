@@ -1,4 +1,8 @@
-## tesla-ble fork v5.2.0-dm.3: media controls and media state, scheduled departure, guest mode, cabin overheat temperature
+## tesla-ble fork v5.2.0-dm.4: wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+
+### Fixed in dm.4
+- **One infotainment session request per wake.** A waking car sends a burst of status updates. Once the infotainment session request was out, each further "awake" status restarted the auth and sent another request (5 in 0.6 s seen on a car), all queued behind each other: the first command after a wake took about 8 s instead of 0.5 s. Now only a command still waiting for the wake reacts.
+- **A resend is the same message.** When no reply arrives in time, the request is sent again as the identical bytes, as Tesla's vehicle-command does, instead of being rebuilt with a new counter. If the first one did arrive and only the reply was lost, the car sees a duplicate instead of a new command, so toggles (media play / pause, trunk, volume step, horn) are not executed twice. After a new session the request is built again.
 
 Fork of [yoziru/tesla-ble](https://github.com/yoziru/tesla-ble), maintained for [esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi) (from release `v2026.10.5`). It adds the vehicle actions that the Tesla app has but the upstream library does not send yet. Everything else is upstream code, unchanged.
 
@@ -32,7 +36,7 @@ Fork of [yoziru/tesla-ble](https://github.com/yoziru/tesla-ble), maintained for 
 The message fields follow Tesla's [vehicle-command](https://github.com/teslamotors/vehicle-command) (`SetGuestMode`, `SetCabinOverheatProtectionTemperature`, `ScheduleDeparture` / `ClearScheduledDeparture`, `ToggleMediaPlayback`, `MediaNextTrack` / `MediaPreviousTrack`, `MediaNextFavorite` / `MediaPreviousFavorite`, `SetVolume`, `VolumeUp` / `VolumeDown`). These actions go to the infotainment domain, like the other vehicle controls.
 
 ### Tests
-There are new tests for the volume builder and for reading the media state, artist and title from a response.
+There are new tests for the volume builder and for reading the media state, artist and title from a response (dm.3), for a wake status burst sending one session request, and for a timed-out request being resent byte for byte (dm.4).
 
 ### Use it
 ESP-IDF / ESPHome component:
@@ -43,13 +47,14 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v5.2.0-dm.3
+        ref: v5.2.0-dm.4
 ```
 
 ### Branches and roll back
 - `multicar`: the fork's changes (the default branch).
 - `main`: mirrors upstream, to sync from.
 - Tags are never moved.
+  - To roll back to dm.3 (without the wake fix and identical resends), use `v5.2.0-dm.3`.
   - To roll back to dm.2 (no media), use `v5.2.0-dm.2`.
   - To roll back to dm.1 (no scheduled departure), use `v5.2.0-dm.1`.
   - To roll back to plain upstream, use `v5.2.0`.

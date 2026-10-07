@@ -1574,6 +1574,92 @@ TEST_F(VehicleTest, InfotainmentWakeTransitionResetsCommandTimeoutBudget) {
       << "Successful session info response should allow the poll to be sent instead of timing out";
 }
 
+TEST_F(VehicleTest, WakeStatusBurstSendsOneInfotainmentSessionRequest) {
+  vehicle_->set_connected(true);
+  vehicle_->send_command_bool(
+      UniversalMessage_Domain_DOMAIN_INFOTAINMENT, "Infotainment Poll",
+      [](Client *client, uint8_t *buff, size_t *len) {
+        return client->build_car_server_get_vehicle_data_message(buff, len,
+                                                                 CarServer_GetVehicleData_getChargeState_tag);
+      },
+      nullptr, true);
+  vehicle_->loop();
+
+  auto writes = mock_ble_->get_written_data();
+  ASSERT_GE(writes.size(), 1);
+  size_t vcsec_uuid_length = 0;
+  auto vcsec_uuid = extract_request_uuid(writes.front(), &vcsec_uuid_length);
+  vehicle_->on_rx_data(make_vcsec_session_info_with_valid_hmac(vcsec_uuid.data(), vcsec_uuid_length));
+  vehicle_->loop();
+
+  auto &command_queue = vehicle_->get_command_queue_for_testing();
+  ASSERT_FALSE(command_queue.empty());
+  auto command = command_queue.front();
+
+  // The car wakes: the first status moves the command on to the infotainment
+  // session request...
+  auto awake_status = make_vcsec_vehicle_status_awake_message();
+  ASSERT_FALSE(awake_status.empty());
+  vehicle_->on_rx_data(awake_status);
+  vehicle_->loop();
+  ASSERT_EQ(command->state, CommandState::AUTH_RESPONSE_WAITING);
+  ASSERT_EQ(command->current_auth_domain, UniversalMessage_Domain_DOMAIN_INFOTAINMENT);
+  const size_t writes_after_first = mock_ble_->get_written_data().size();
+
+  // ...and the rest of a waking car's status burst must not send it again
+  for (int i = 0; i < 4; ++i) {
+    vehicle_->on_rx_data(awake_status);
+    vehicle_->loop();
+  }
+  EXPECT_EQ(mock_ble_->get_written_data().size(), writes_after_first)
+      << "Further awake statuses must not send more infotainment session requests";
+  EXPECT_EQ(command->state, CommandState::AUTH_RESPONSE_WAITING);
+  EXPECT_EQ(command->current_auth_domain, UniversalMessage_Domain_DOMAIN_INFOTAINMENT);
+}
+
+TEST_F(VehicleTest, ResponseTimeoutResendsTheSameMessage) {
+  vehicle_->set_connected(true);
+  vehicle_->set_sleep_state(TeslaBLE::SleepState::AWAKE);
+  vehicle_->send_command_bool(
+      UniversalMessage_Domain_DOMAIN_INFOTAINMENT, "Infotainment Poll",
+      [](Client *client, uint8_t *buff, size_t *len) {
+        return client->build_car_server_get_vehicle_data_message(buff, len,
+                                                                 CarServer_GetVehicleData_getChargeState_tag);
+      },
+      nullptr, true);
+  vehicle_->loop();
+
+  auto writes = mock_ble_->get_written_data();
+  ASSERT_GE(writes.size(), 1);
+  size_t vcsec_uuid_length = 0;
+  auto vcsec_uuid = extract_request_uuid(writes.front(), &vcsec_uuid_length);
+  vehicle_->on_rx_data(make_vcsec_session_info_with_valid_hmac(vcsec_uuid.data(), vcsec_uuid_length));
+  vehicle_->loop();
+
+  writes = mock_ble_->get_written_data();
+  size_t info_uuid_length = 0;
+  auto info_uuid = extract_request_uuid(writes.back(), &info_uuid_length);
+  vehicle_->on_rx_data(make_infotainment_session_info_with_valid_hmac(info_uuid.data(), info_uuid_length));
+  vehicle_->loop();  // session in: READY
+  vehicle_->loop();  // request sent
+
+  auto &command_queue = vehicle_->get_command_queue_for_testing();
+  ASSERT_FALSE(command_queue.empty());
+  auto command = command_queue.front();
+  ASSERT_EQ(command->state, CommandState::WAITING_FOR_RESPONSE);
+  const auto first_send = mock_ble_->get_written_data().back();
+
+  // No reply within the transport retry interval
+  command->last_tx_at = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+  vehicle_->loop();  // timeout: retry
+  vehicle_->loop();  // resend
+  ASSERT_EQ(command->state, CommandState::WAITING_FOR_RESPONSE);
+  ASSERT_EQ(command->retry_count, 1);
+
+  const auto resend = mock_ble_->get_written_data().back();
+  EXPECT_EQ(resend, first_send) << "A resend must be the identical message (same counter), not a rebuilt one";
+}
+
 // ============================================================================
 // Session Recovery: ERROR_TIME_EXPIRED triggers peer reset and re-auth
 // ============================================================================
