@@ -1,4 +1,8 @@
-## tesla-ble fork v5.2.0-dm.4: wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+## tesla-ble fork v5.2.0-dm.5: crash fix; wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+
+### Fixed in dm.5
+- **Crash (abort) from heap churn.** The received-message processor built a fresh `std::queue` on every loop, before checking whether anything was queued. A `std::deque` allocates even when empty: a map plus a node holding one ~750-byte message, so every loop did two heap allocations. Under BLE and Wi-Fi load one of them eventually failed, and with exceptions disabled that aborted the ESP32 (seen on a Shelly Plus 1, backtrace in `MessageProcessor::process_messages`). It now allocates nothing when idle and takes messages off the queue one at a time. This code came from upstream.
+- **Message backlog capped at 16** instead of 1000 (about 750 KB at full size, more heap than an ESP32 has). The oldest message is dropped first, as before.
 
 ### Fixed in dm.4
 - **One infotainment session request per wake.** A waking car sends a burst of status updates. Once the infotainment session request was out, each further "awake" status restarted the auth and sent another request (5 in 0.6 s seen on a car), all queued behind each other: the first command after a wake took about 8 s instead of 0.5 s. Now only a command still waiting for the wake reacts.
@@ -36,7 +40,7 @@ Fork of [yoziru/tesla-ble](https://github.com/yoziru/tesla-ble), maintained for 
 The message fields follow Tesla's [vehicle-command](https://github.com/teslamotors/vehicle-command) (`SetGuestMode`, `SetCabinOverheatProtectionTemperature`, `ScheduleDeparture` / `ClearScheduledDeparture`, `ToggleMediaPlayback`, `MediaNextTrack` / `MediaPreviousTrack`, `MediaNextFavorite` / `MediaPreviousFavorite`, `SetVolume`, `VolumeUp` / `VolumeDown`). These actions go to the infotainment domain, like the other vehicle controls.
 
 ### Tests
-There are new tests for the volume builder and for reading the media state, artist and title from a response (dm.3), for a wake status burst sending one session request, and for a timed-out request being resent byte for byte (dm.4).
+There are new tests for the volume builder and for reading the media state, artist and title from a response (dm.3), for a wake status burst sending one session request, and for a timed-out request being resent byte for byte (dm.4), and for the message processor: order, nothing processed when idle, messages queued meanwhile wait, bounded backlog (dm.5).
 
 ### Use it
 ESP-IDF / ESPHome component:
@@ -47,13 +51,14 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v5.2.0-dm.4
+        ref: v5.2.0-dm.5
 ```
 
 ### Branches and roll back
 - `multicar`: the fork's changes (the default branch).
 - `main`: mirrors upstream, to sync from.
 - Tags are never moved.
+  - To roll back to dm.4 (without the crash fix), use `v5.2.0-dm.4`.
   - To roll back to dm.3 (without the wake fix and identical resends), use `v5.2.0-dm.3`.
   - To roll back to dm.2 (no media), use `v5.2.0-dm.2`.
   - To roll back to dm.1 (no scheduled departure), use `v5.2.0-dm.1`.

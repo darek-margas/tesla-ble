@@ -25,15 +25,21 @@ void MessageProcessor::queue_message(const UniversalMessage_RoutableMessage &msg
 }
 
 size_t MessageProcessor::process_messages() {
-  std::queue<UniversalMessage_RoutableMessage> pending;
+  // Called on every loop, usually with nothing queued. It used to build a
+  // local std::queue first: a std::deque allocates its map and a node (one
+  // ~750-byte RoutableMessage) even when empty, so every loop did two heap
+  // allocations. Under BLE + Wi-Fi load that churn eventually failed and,
+  // with exceptions disabled, aborted (seen on an ESP32). Now nothing is
+  // allocated: messages are taken off the queue one at a time.
+  size_t to_process;
   {
     std::scoped_lock lock(queue_mutex_);
     if (message_queue_.empty()) {
       return 0;
     }
-
     processing_ = true;
-    pending.swap(message_queue_);
+    // Only what is queued now; messages queued meanwhile wait for the next call
+    to_process = message_queue_.size();
   }
 
   struct ProcessingGuard {
@@ -45,10 +51,17 @@ size_t MessageProcessor::process_messages() {
   } guard{this};
 
   size_t processed = 0;
-  if (message_handler_) {
-    while (!pending.empty()) {
-      const auto msg = pending.front();
-      pending.pop();
+  for (size_t taken = 0; taken < to_process; ++taken) {
+    UniversalMessage_RoutableMessage msg = UniversalMessage_RoutableMessage_init_default;
+    {
+      std::scoped_lock lock(queue_mutex_);
+      if (message_queue_.empty()) {
+        break;
+      }
+      msg = message_queue_.front();
+      message_queue_.pop();
+    }
+    if (message_handler_) {
       message_handler_(msg);
       processed++;
     }

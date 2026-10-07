@@ -72,7 +72,9 @@ class MessageProcessor {
   void clear_queue();
 
  private:
-  static constexpr size_t MAX_QUEUE_SIZE = 1000;
+  // Messages are processed on every loop, so a long backlog means something is
+  // stuck; at ~750 bytes each, 1000 would need far more heap than an ESP32 has.
+  static constexpr size_t MAX_QUEUE_SIZE = 16;
   MessageHandler message_handler_;
   std::queue<UniversalMessage_RoutableMessage> message_queue_;
   mutable std::mutex queue_mutex_;
