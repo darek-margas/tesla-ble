@@ -1,4 +1,10 @@
-## tesla-ble fork v5.2.0-dm.6: session request resend; crash fix; wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+## tesla-ble fork v5.2.0-dm.7: compile-time log level, ESP32-C5; session request resend; crash fix; wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+
+### Added in dm.7
+- **Compile-time log level** `TESLA_BLE_LOG_LEVEL` (0 = error, 1 = warn, 2 = info, 3 = debug, 4 = verbose, the default). Messages above it are left out of the build, so their texts take no flash. Without the define nothing changes. esphome-tesla-ble-multi sets it from the ESPHome logger level.
+- **ESP32-C5** in the component manifest targets.
+
+Both by @davidcoulson.
 
 ### Fixed in dm.6
 - **First command after a wake failed after 25 s (regression in dm.4).** dm.4 stopped the burst of session requests during a wake, but a single request sent the moment VCSEC reports the car awake is ignored by its still-waking infotainment, so the command waited the full 25 s auth timeout and failed (seen on two cars: the first Charge State Poll after every wake). An unanswered session info request is now resent unchanged every second (at most 10 times, still within the 25 s), as vehicle-command does. Same bytes, same request id: whichever copy the car answers is accepted. This also covers any other lost session request.
@@ -54,13 +60,14 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v5.2.0-dm.6
+        ref: v5.2.0-dm.7
 ```
 
 ### Branches and roll back
 - `multicar`: the fork's changes (the default branch).
 - `main`: mirrors upstream, to sync from.
 - Tags are never moved.
+  - To roll back to dm.6 (no compile-time log level), use `v5.2.0-dm.6`.
   - To roll back to dm.5 (session request not resent: first command after a wake may wait 25 s), use `v5.2.0-dm.5`.
   - To roll back to dm.4 (without the crash fix), use `v5.2.0-dm.4`.
   - To roll back to dm.3 (without the wake fix and identical resends), use `v5.2.0-dm.3`.
