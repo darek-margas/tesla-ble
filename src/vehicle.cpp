@@ -301,6 +301,19 @@ void TeslaBLE::Vehicle::process_authenticating_command_(const std::shared_ptr<Co
 
 void TeslaBLE::Vehicle::process_auth_response_waiting_command_(const std::shared_ptr<Command> &command) {
   auto now = std::chrono::steady_clock::now();
+  // Session info request not answered yet: send the same bytes again (same
+  // request id, so whichever copy the car answers is accepted). The overall
+  // wait is still AUTH_RESPONSE_TIMEOUT from the first send.
+  if (command->current_auth_domain == command->auth_request_domain &&
+      command->current_auth_domain != UniversalMessage_Domain_DOMAIN_BROADCAST && !command->auth_request.empty() &&
+      command->auth_resends < MAX_AUTH_RESENDS && now - command->auth_resend_at >= TRANSPORT_RETRY_INTERVAL) {
+    if (ble_adapter_->write(command->auth_request)) {
+      command->auth_resends++;
+      LOG_DEBUG("Resent %s Session Info Request (%d/%d)", domain_to_string(command->current_auth_domain),
+                command->auth_resends, MAX_AUTH_RESENDS);
+    }
+    command->auth_resend_at = now;
+  }
   auto tx_duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - command->last_tx_at);
   if (tx_duration > AUTH_RESPONSE_TIMEOUT) {
     switch (command->current_auth_domain) {
@@ -385,6 +398,10 @@ void TeslaBLE::Vehicle::initiate_auth_for_domain_(const std::shared_ptr<Command>
       if (ble_adapter_->write(data)) {
         command->state = waiting_state;
         command->last_tx_at = std::chrono::steady_clock::now();
+        command->auth_request = std::move(data);
+        command->auth_request_domain = domain;
+        command->auth_resend_at = command->last_tx_at;
+        command->auth_resends = 0;
         LOG_INFO("Sent %s Session Info Request", domain_name.c_str());
       } else {
         LOG_ERROR("Failed to write %s Session Info Request", domain_name.c_str());

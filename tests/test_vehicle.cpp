@@ -1617,6 +1617,54 @@ TEST_F(VehicleTest, WakeStatusBurstSendsOneInfotainmentSessionRequest) {
   EXPECT_EQ(command->current_auth_domain, UniversalMessage_Domain_DOMAIN_INFOTAINMENT);
 }
 
+TEST_F(VehicleTest, UnansweredSessionRequestIsResentUnchangedEverySecond) {
+  vehicle_->set_connected(true);
+  vehicle_->send_command_bool(
+      UniversalMessage_Domain_DOMAIN_INFOTAINMENT, "Infotainment Poll",
+      [](Client *client, uint8_t *buff, size_t *len) {
+        return client->build_car_server_get_vehicle_data_message(buff, len,
+                                                                 CarServer_GetVehicleData_getChargeState_tag);
+      },
+      nullptr, true);
+  vehicle_->loop();
+
+  auto writes = mock_ble_->get_written_data();
+  ASSERT_GE(writes.size(), 1);
+  size_t vcsec_uuid_length = 0;
+  auto vcsec_uuid = extract_request_uuid(writes.front(), &vcsec_uuid_length);
+  vehicle_->on_rx_data(make_vcsec_session_info_with_valid_hmac(vcsec_uuid.data(), vcsec_uuid_length));
+  vehicle_->loop();
+  vehicle_->on_rx_data(make_vcsec_vehicle_status_awake_message());
+  vehicle_->loop();
+
+  auto &command_queue = vehicle_->get_command_queue_for_testing();
+  ASSERT_FALSE(command_queue.empty());
+  auto command = command_queue.front();
+  ASSERT_EQ(command->state, CommandState::AUTH_RESPONSE_WAITING);
+  ASSERT_EQ(command->current_auth_domain, UniversalMessage_Domain_DOMAIN_INFOTAINMENT);
+  const auto session_request = mock_ble_->get_written_data().back();
+  const size_t writes_before = mock_ble_->get_written_data().size();
+
+  // Within the second: nothing more is sent
+  vehicle_->loop();
+  EXPECT_EQ(mock_ble_->get_written_data().size(), writes_before);
+
+  // A second later the car has not answered (it was still waking): same bytes again
+  command->auth_resend_at = std::chrono::steady_clock::now() - std::chrono::milliseconds(1100);
+  vehicle_->loop();
+  ASSERT_EQ(mock_ble_->get_written_data().size(), writes_before + 1);
+  EXPECT_EQ(mock_ble_->get_written_data().back(), session_request)
+      << "The session request must be resent unchanged (same request id)";
+  EXPECT_EQ(command->state, CommandState::AUTH_RESPONSE_WAITING);
+
+  // The answer to that copy is accepted and the command moves on
+  size_t info_uuid_length = 0;
+  auto info_uuid = extract_request_uuid(session_request, &info_uuid_length);
+  vehicle_->on_rx_data(make_infotainment_session_info_with_valid_hmac(info_uuid.data(), info_uuid_length));
+  vehicle_->loop();
+  EXPECT_NE(command->state, CommandState::AUTH_RESPONSE_WAITING);
+}
+
 TEST_F(VehicleTest, ResponseTimeoutResendsTheSameMessage) {
   vehicle_->set_connected(true);
   vehicle_->set_sleep_state(TeslaBLE::SleepState::AWAKE);
