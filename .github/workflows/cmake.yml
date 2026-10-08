@@ -35,6 +35,11 @@ jobs:
           - check: test
             check-name: Build and Test
             packages: protobuf-compiler build-essential cmake ccache
+          # Same tests against Mbed TLS 4.1 (TF-PSA-Crypto), as shipped by ESP-IDF 6.x
+          - check: test-mbedtls4
+            check-name: Build and Test (Mbed TLS 4)
+            packages: protobuf-compiler build-essential cmake ccache
+            cmake_args: -DTESLABLE_MBEDTLS_4=ON
           - check: examples
             check-name: Build Examples
             packages: protobuf-compiler build-essential cmake ccache
@@ -77,7 +82,7 @@ jobs:
           clang-tidy --version
 
       - name: Install python dependencies
-        if: matrix.check == 'test' || matrix.check == 'examples'
+        if: matrix.check == 'test' || matrix.check == 'test-mbedtls4' || matrix.check == 'examples'
         run: python3 -m pip install protobuf grpcio-tools
 
       - name: Setup ccache
@@ -103,6 +108,7 @@ jobs:
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ${{ matrix.cmake_args }}
           -S ${{ github.workspace }}
 
       - name: Check clang-format
@@ -114,11 +120,11 @@ jobs:
         run: ./scripts/clang-tidy.sh --check
 
       - name: Build Library
-        if: matrix.check == 'test'
+        if: matrix.check == 'test' || matrix.check == 'test-mbedtls4'
         run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ env.BUILD_TYPE }} -j
 
       - name: Run Tests
-        if: matrix.check == 'test'
+        if: matrix.check == 'test' || matrix.check == 'test-mbedtls4'
         working-directory: ${{ steps.strings.outputs.build-output-dir }}
         run: ctest --build-config ${{ env.BUILD_TYPE }} --output-on-failure --verbose
 

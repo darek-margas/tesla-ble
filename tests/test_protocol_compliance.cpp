@@ -241,25 +241,12 @@ TEST(ProtocolFailureTest, AesGcmProtocolCompliance) {
 
   EXPECT_EQ(result, TeslaBLE_Status_E_OK) << "Should load private key for AES-GCM testing";
 
-// Implement protocol-compliant AES-GCM encryption using mbedtls
-#include <mbedtls/gcm.h>
-#include <mbedtls/sha256.h>
+  // Protocol-compliant AES-GCM encryption (PSA, via CryptoUtils)
   EXPECT_TRUE(crypto.is_private_key_initialized()) << "Crypto context should be initialized";
 
   // Hash metadata for AAD
   uint8_t aad[32];
-  mbedtls_sha256_context sha_ctx;
-  mbedtls_sha256_init(&sha_ctx);
-  mbedtls_sha256_starts(&sha_ctx, 0);  // 0 = SHA-256
-  mbedtls_sha256_update(&sha_ctx, metadata, sizeof(metadata));
-  mbedtls_sha256_finish(&sha_ctx, aad);
-  mbedtls_sha256_free(&sha_ctx);
-
-  // Prepare AES-GCM
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-  int gcm_ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 128);
-  ASSERT_EQ(gcm_ret, 0) << "mbedtls_gcm_setkey failed";
+  ASSERT_EQ(CryptoUtils::sha256_hash(metadata, sizeof(metadata), aad), TeslaBLE_Status_E_OK);
 
   // Random nonce (12 bytes)
   uint8_t nonce[12] = {0};
@@ -269,10 +256,10 @@ TEST(ProtocolFailureTest, AesGcmProtocolCompliance) {
 
   uint8_t ciphertext[sizeof(plaintext)];
   uint8_t tag[16];
-  gcm_ret = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, sizeof(plaintext), nonce, sizeof(nonce), aad,
-                                      sizeof(aad), plaintext, ciphertext, sizeof(tag), tag);
-  mbedtls_gcm_free(&gcm);
-  ASSERT_EQ(gcm_ret, 0) << "mbedtls_gcm_crypt_and_tag failed";
+  ASSERT_EQ(CryptoUtils::aes_gcm_encrypt(key, nonce, aad, sizeof(aad), plaintext, sizeof(plaintext), ciphertext,
+                                         sizeof(ciphertext), tag),
+            TeslaBLE_Status_E_OK)
+      << "AES-GCM encryption failed";
 
   // We can't check for exact ciphertext/tag due to nonce, but check output length
   EXPECT_EQ(sizeof(ciphertext), sizeof(plaintext));

@@ -9,8 +9,6 @@
 #include <client.h>
 #include <peer.h>
 #include <crypto_context.h>
-#include <mbedtls/md.h>
-#include <mbedtls/sha256.h>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -63,21 +61,16 @@ TEST_F(ProtocolEdgeCasesTest, MalformedMetadata) {
   Peer peer(UniversalMessage_Domain_DOMAIN_INFOTAINMENT, crypto_context_, TestConstants::TEST_VIN);
   uint8_t malformed_metadata[3] = {0x02, 0x11};  // Incomplete TLV
   uint8_t ad_hash[32];
-  int ret = mbedtls_sha256(malformed_metadata, 2, ad_hash, 0);
-  EXPECT_EQ(ret, 0);
+  EXPECT_EQ(CryptoUtils::sha256_hash(malformed_metadata, 2, ad_hash), TeslaBLE_Status_E_OK);
   // Try to use malformed metadata in encryption (should fail or be handled)
   pb_byte_t plaintext[4] = {1, 2, 3, 4};
   pb_byte_t ciphertext[16];
   pb_byte_t tag[16];
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-  ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, ad_hash, 128);
-  EXPECT_EQ(ret, 0);
-  ret =
-      mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, 4, ad_hash, 12, nullptr, 0, plaintext, ciphertext, 16, tag);
-  EXPECT_TRUE(ret == 0 || ret != 0) << "Malformed metadata should not crash";
-  // Should not crash, but may fail due to bad key
-  mbedtls_gcm_free(&gcm);
+  // Hash bytes as key and nonce, no AAD: must not crash.
+  auto status = CryptoUtils::aes_gcm_encrypt(ad_hash, ad_hash, nullptr, 0, plaintext, sizeof(plaintext), ciphertext,
+                                             sizeof(ciphertext), tag);
+  EXPECT_TRUE(status == TeslaBLE_Status_E_OK || status != TeslaBLE_Status_E_OK)
+      << "Malformed metadata should not crash";
 }
 
 // Test 5: Request Hash Construction with Short Tag (should handle gracefully)
@@ -99,8 +92,7 @@ TEST_F(ProtocolEdgeCasesTest, HmacAllZeroKey) {
   uint8_t key[16] = {0};
   uint8_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
   uint8_t hmac[32];
-  int ret = mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), key, 16, data, 8, hmac);
-  EXPECT_EQ(ret, 0);
+  EXPECT_EQ(CryptoUtils::hmac_sha256(key, 16, data, 8, hmac, sizeof(hmac)), TeslaBLE_Status_E_OK);
   // HMAC should not be all zeros
   bool all_zero = true;
   for (unsigned char value : hmac) {
