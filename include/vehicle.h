@@ -125,22 +125,25 @@ struct Command {
   std::chrono::steady_clock::time_point phase_started_at;
   std::chrono::steady_clock::time_point last_tx_at;
   uint8_t retry_count = 0;
+  // Small members of the two blocks below, kept here to avoid padding
+  bool resend_encoded = false;
+  uint8_t auth_resends = 0;
+  UniversalMessage_Domain auth_request_domain = UniversalMessage_Domain_DOMAIN_BROADCAST;
 
   // The encoded request as last sent. A resend after a response timeout writes
   // these same bytes (as vehicle-command does): the car treats a repeat as a
   // duplicate instead of a new command, so a command that did arrive (only the
   // reply was lost) is not executed twice. Rebuilt only after a new session.
+  // resend_encoded: the next send writes these bytes again.
   std::vector<uint8_t> encoded_request;
-  bool resend_encoded = false;
 
   // The pending session info request, resent unchanged every second while no
   // answer comes (as vehicle-command does). The infotainment of a car that is
   // just waking ignores a request sent the moment VCSEC reports it awake; with
   // a single request the command then waited the full auth timeout (25 s).
+  // auth_request_domain: its domain; auth_resends: copies sent so far.
   std::vector<uint8_t> auth_request;
-  UniversalMessage_Domain auth_request_domain = UniversalMessage_Domain_DOMAIN_BROADCAST;
   std::chrono::steady_clock::time_point auth_resend_at;
-  uint8_t auth_resends = 0;
 
   // Error tracking for intelligent retry decisions
   std::unique_ptr<CommandError> last_error;
@@ -287,7 +290,7 @@ class Vehicle {
   void media_previous_favorite();
   void media_volume_up();
   void media_volume_down();
-  void set_media_volume(float volume);  // 0-10, as vehicle-command SetVolume
+  void set_media_volume(float level);  // 0-10, as vehicle-command SetVolume
 
   // Pairing & Auth
   void pair(Keys_Role role = Keys_Role_ROLE_OWNER);
