@@ -1,6 +1,6 @@
 # TeslaBLE - A C++ library for communicating with Tesla vehicles over BLE
 
-> **darek-margas fork.** The `multicar` branch is upstream plus fixes and actions used by [esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi): responses from the car authenticated and crypto on the PSA API, no crash from per-loop allocation, one session request per wake with unchanged resends, media controls and media state, scheduled departure, guest mode and cabin overheat protection temperature. The tags are `v5.2.0-dm.N`. See [the fork release notes](.github/fork-release-notes.md). `main` mirrors upstream; the fixes are offered upstream as pull requests. Report problems at [esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi/issues) (issues are off on this fork).
+> **This is the darek-margas fork** of [yoziru/tesla-ble](https://github.com/yoziru/tesla-ble), used by [esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi). It verifies the car's replies, fixes a crash and the first command after a wake, adds media, scheduled departure, guest mode and cabin overheat temperature, and builds on ESP-IDF 6. See [This fork](#this-fork) for what changed and how to use it.
 
 This library is designed to communicate with Tesla vehicles locally via the BLE API. It follows the same principles as the official Tesla [vehicle-command](https://github.com/teslamotors/vehicle-command) library (Golang), and is intended for use in embedded systems.
 
@@ -11,11 +11,68 @@ It exists to:
 
 The main purpose of this library is to locally manage charging of the vehicle to enable use cases such as charging during off-peak hours, or to manage charging based on solar production. It is not intended to replace the official Tesla API for all use cases.
 
+## This fork
+
+Upstream `v5.2.0` and the upstream `main` commits after it (low power mode and keep accessory power actions), plus the changes below. Each fork release is a tag `v5.2.0-dm.N`; the [fork release notes](.github/fork-release-notes.md) give the details and the roll-back tag for each step.
+
+### Use it
+
+As an ESP-IDF / ESPHome component (needs ESP-IDF 5.3 or newer; ESPHome 2026.9 has 5.5):
+
+```yaml
+esp32:
+  framework:
+    components:
+      - name: tesla-ble
+        source: https://github.com/darek-margas/tesla-ble.git
+        ref: v5.2.0-dm.9
+```
+
+Targets: ESP32, ESP32-S3, ESP32-C3, ESP32-C6 and ESP32-C5.
+
+### What is different from upstream
+
+**Security**
+- **Replies from the car are authenticated.** Upstream decrypts them but never checks their AES-GCM tag: the received tag is passed to `mbedtls_gcm_finish()` as its output buffer, which overwrites it instead of comparing. A corrupted or forged reply would be accepted. The fork checks the tag, with the counter the car sends in its reply (`AES_GCM_ResponseData.counter`). (dm.8)
+- **Crypto on the PSA API** (P-256 key agreement, AES-GCM, SHA-1/SHA-256, HMAC), so the library builds with Mbed TLS 3.6 (ESP-IDF 5.3+) and Mbed TLS 4 (ESP-IDF 6). Stored private keys keep their format: existing pairings keep working. (dm.8)
+
+**Fixes**
+- **No crash from heap churn.** `MessageProcessor::process_messages()` built a `std::queue` on every loop, which allocates even when empty. Under BLE and Wi-Fi load an allocation eventually failed and the ESP32 aborted. It now allocates nothing while idle; the message backlog is capped at 16 instead of 1000. (dm.5)
+- **One session request per wake.** A waking car sends a burst of status updates, and each one used to send another infotainment session request: the first command after a wake took about 8 s. (dm.4)
+- **An unanswered session request is resent unchanged every second** (up to 10 times), as vehicle-command does. A single request sent the moment the car reports awake is often ignored, and the command then waited the full 25 s auth timeout. (dm.6)
+- **A command resend is the identical message.** When a reply is lost, the command is resent as the same bytes instead of being rebuilt with a new counter, so the car sees a duplicate and a toggle (trunk, play / pause) is not carried out twice. (dm.4)
+- **A late reply to an earlier request logs at DEBUG**, not as a warning. (dm.9)
+
+**Added vehicle actions** (infotainment domain, message fields as in vehicle-command)
+
+| Action | API | Since |
+|---|---|---|
+| Media state read | `Vehicle::media_state_poll(wake_policy)`, `Vehicle::set_media_state_callback(cb(const CarServer_MediaState &, const MediaNowPlaying &))` | dm.3 |
+| Media volume | `media_volume_up()`, `media_volume_down()`, `set_media_volume(0..10)` | dm.3 |
+| Media playback | `media_toggle_playback()`, `media_next_track()`, `media_previous_track()`, `media_next_favorite()`, `media_previous_favorite()` | dm.3 |
+| Scheduled departure | `set_scheduled_departure(enabled, departure_minutes, preconditioning_policy, off_peak_policy, off_peak_end_minutes)` | dm.2 |
+| Guest mode | `set_guest_mode(bool)` | dm.1 |
+| Cabin overheat protection temperature | `set_cabin_overheat_protection_temp(level)`: 1 = 30 °C, 2 = 35 °C, 3 = 40 °C | dm.1 |
+
+Media artist and title are unbounded strings that the generated `CarServer_MediaState` does not keep; they are read from the raw reply into `MediaNowPlaying` (up to 128 bytes each). The generated protobuf code is unchanged. Details per action are in the [fork release notes](.github/fork-release-notes.md).
+
+**Build**
+- **Compile-time log level:** define `TESLA_BLE_LOG_LEVEL` (0 = error, 1 = warn, 2 = info, 3 = debug, 4 = verbose, the default). Messages above it are left out of the build and take no flash. (dm.7)
+- **Mbed TLS 4 host build:** `cmake -B build -DTESLABLE_MBEDTLS_4=ON` builds and tests against Mbed TLS 4 (TF-PSA-Crypto), as in ESP-IDF 6. CI runs the tests against both. (dm.8)
+- **ESP32-C5** in the component targets. (dm.7)
+
+### Branches, releases and upstream
+
+- `multicar` (default): the fork. `main` mirrors upstream, to sync from.
+- A change to `FORK_VERSION` on `multicar` runs the tests (Mbed TLS 3.6 and 4) and publishes the tag and release. Tags are never moved.
+- The changes are offered upstream: [#90](https://github.com/yoziru/tesla-ble/pull/90) (vehicle actions), [#94](https://github.com/yoziru/tesla-ble/pull/94) (crash fix), [#95](https://github.com/yoziru/tesla-ble/pull/95) (wake and resends), and by [@davidcoulson](https://github.com/davidcoulson) [#91](https://github.com/yoziru/tesla-ble/pull/91) (PSA crypto and verified replies), [#92](https://github.com/yoziru/tesla-ble/pull/92) (ESP32-C5), [#93](https://github.com/yoziru/tesla-ble/pull/93) (log level).
+- Problems: please report them at [esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi/issues); issues are off on this fork.
+
 ## Usage
 
 This project is intended to be used as a library in your own project. It is not a standalone application.
 
-[yoziru/esphome-tesla-ble](https://github.com/yoziru/esphome-tesla-ble) is an ESPHome project that uses this library to control your Tesla vehicle charging.
+[yoziru/esphome-tesla-ble](https://github.com/yoziru/esphome-tesla-ble) is an ESPHome project that uses this library to control your Tesla vehicle charging. [darek-margas/esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi) uses this fork to control several cars from one ESP32.
 
 Several examples are included for your convenience.
 
@@ -31,7 +88,7 @@ make
 
 ```bash
 # Clone the repository
-git clone https://github.com/yoziru/tesla-ble.git
+git clone https://github.com/darek-margas/tesla-ble.git   # this fork (upstream: yoziru/tesla-ble)
 cd tesla-ble
 
 # Setup development environment (optional but recommended)
@@ -175,14 +232,13 @@ This script will:
 
 ### Continuous Integration
 
-The project uses GitHub Actions for CI/CD with the following features:
+GitHub Actions (`.github/workflows/cmake.yml`) runs on every push and pull request to `main` and `multicar`:
 
-- **Cross-platform testing**: Ubuntu, Windows, macOS
-- **Multiple build types**: Debug and Release
-- **Code coverage**: Automatic coverage reporting to Codecov
-- **Static analysis**: cppcheck integration
-- **Memory testing**: Valgrind and AddressSanitizer
-- **Performance testing**: Various sanitizers (address, undefined, thread)
+- **Format check**: clang-format 21
+- **Tidy check**: clang-tidy 21, warnings are errors
+- **Build and test**: the library and all tests, against Mbed TLS 3.6
+- **Build and test (Mbed TLS 4)**: the same tests against Mbed TLS 4 (TF-PSA-Crypto)
+- **Build examples**: builds and runs `examples/simple`
 
 ### Test Structure
 
@@ -216,8 +272,8 @@ This architecture provides a clean, maintainable approach to command lifecycle m
 ### Dependencies
 
 - [nanopb](https://github.com/nanopb/nanopb)
-- [mbedtls 3.x](https://github.com/Mbed-TLS/mbedtls)
-  - NOTE: ESP-IDF <=4.4 includes [mbedtls 2.x](https://github.com/espressif/mbedtls/wiki#mbed-tls-support-in-esp-idf), and is not compatible with this library. You will need to use at least ESP-IDF 5.0.
+- [Mbed TLS](https://github.com/Mbed-TLS/mbedtls) 3.6 or 4.x, through its PSA crypto API
+  - NOTE: needs ESP-IDF 5.3 or newer (Mbed TLS 3.6). ESP-IDF 6 ships Mbed TLS 4 and works too. Older ESP-IDF versions are not compatible with this fork; `v5.2.0-dm.7` is the last tag that builds on ESP-IDF 5.0–5.2.
 
 ## Features
 
@@ -227,10 +283,15 @@ This architecture provides a clean, maintainable approach to command lifecycle m
 - [x] Supports `UniversalMessage.RoutableMessage` encoding and decoding
   - [x] Supports Vehicle Security (VSSEC) payload
   - [x] Supports Infotainment payload
+- [x] Replies from the car authenticated (AES-GCM tag checked) (fork)
+- [x] Session info requests and timed-out commands resent unchanged, as vehicle-command does (fork)
+- [x] Media state and controls, scheduled departure, guest mode, cabin overheat protection temperature (fork)
 
 # Credits
 
 This fork builds on the original version by [pmdroid](https://github.com/pmdroid/tesla-ble/tree/main).
+
+The darek-margas fork is maintained for [esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi) on top of [yoziru/tesla-ble](https://github.com/yoziru/tesla-ble). The PSA crypto port and reply authentication, the compile-time log level, ESP32-C5 and the Mbed TLS 4 tests are by [@davidcoulson](https://github.com/davidcoulson).
 
 # IMPORTANT
 

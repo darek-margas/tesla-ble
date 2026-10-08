@@ -75,7 +75,7 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v5.2.0-dm.8
+        ref: v5.2.0-dm.9
 ```
 
 ### Branches and roll back
