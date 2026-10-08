@@ -1,4 +1,10 @@
-## tesla-ble fork v5.2.0-dm.8: car responses authenticated, PSA crypto; log level, ESP32-C5; session request resend; crash fix; wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+## tesla-ble fork v5.2.0-dm.9: quieter log, Mbed TLS 4 tests; car responses authenticated, PSA crypto; log level, ESP32-C5; session request resend; crash fix; wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+
+### Changed in dm.9
+- **A late reply from the car logs at DEBUG, not WARN.** A response whose request id is not the current one answers an earlier request that was already resent or given up on. Dropping it is correct and the current command reports its own result, so it is no longer a warning (seen several times per poll batch).
+- **Tests also run against Mbed TLS 4** (as in ESP-IDF 6), on every PR and before each fork release. The full CI (format, clang-tidy, tests, examples) now also runs on the `multicar` branch.
+
+No change to commands, sessions or stored keys. dm.9 by @davidcoulson.
 
 ### Security fix in dm.8
 - **Responses from the car are now authenticated.** Encrypted responses were decrypted but their AES-GCM tag was never checked: with the Mbed TLS GCM API the received tag was passed as the output buffer of `mbedtls_gcm_finish()`, which overwrote it with the computed tag instead of comparing the two. A corrupted or forged response would have been accepted. The tag is now verified, and the authenticated data uses the counter the car sends in the response (`AES_GCM_ResponseData.counter`), not our own request counter; with the old counter every response fails once the check is on. This affects all earlier versions, upstream included.
