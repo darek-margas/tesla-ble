@@ -127,6 +127,25 @@ struct Command {
   std::chrono::steady_clock::time_point phase_started_at;
   std::chrono::steady_clock::time_point last_tx_at;
   uint8_t retry_count = 0;
+  // Small members of the two blocks below, kept here to avoid padding
+  bool resend_encoded = false;
+  uint8_t auth_resends = 0;
+  UniversalMessage_Domain auth_request_domain = UniversalMessage_Domain_DOMAIN_BROADCAST;
+
+  // The encoded request as last sent. A resend after a response timeout writes
+  // these same bytes (as vehicle-command does): the car treats a repeat as a
+  // duplicate instead of a new command, so a command that did arrive (only the
+  // reply was lost) is not executed twice. Rebuilt only after a new session.
+  // resend_encoded: the next send writes these bytes again.
+  std::vector<uint8_t> encoded_request;
+
+  // The pending session info request, resent unchanged every second while no
+  // answer comes (as vehicle-command does). The infotainment of a car that is
+  // just waking ignores a request sent the moment VCSEC reports it awake; with
+  // a single request the command then waited the full auth timeout (25 s).
+  // auth_request_domain: its domain; auth_resends: copies sent so far.
+  std::vector<uint8_t> auth_request;
+  std::chrono::steady_clock::time_point auth_resend_at;
 
   // Error tracking for intelligent retry decisions
   std::unique_ptr<CommandError> last_error;
@@ -278,6 +297,9 @@ class Vehicle {
       std::chrono::seconds(4);  // Max age for stale session info responses (from Go impl)
   static constexpr auto TRANSPORT_RETRY_INTERVAL =
       std::chrono::seconds(1);  // Transport-layer retry interval (from Go impl)
+  // Unanswered session info request: resent unchanged this many times, one
+  // TRANSPORT_RETRY_INTERVAL apart, within AUTH_RESPONSE_TIMEOUT
+  static constexpr uint8_t MAX_AUTH_RESENDS = 10;
 
   // Retry configuration
   static constexpr uint8_t MAX_RETRIES = 5;
