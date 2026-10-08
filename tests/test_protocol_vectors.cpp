@@ -11,9 +11,6 @@
 #include <crypto_context.h>
 #include <peer.h>
 #include <client.h>
-#include <mbedtls/sha256.h>
-#include <mbedtls/md.h>
-#include <mbedtls/gcm.h>
 #include <iomanip>
 #include <sstream>
 #include "test_constants.h"
@@ -80,9 +77,9 @@ TEST_F(ProtocolVectorsTest, SessionInfoAuthentication) {
 
   // Derive session info authentication key: HMAC-SHA256(K, "session info")
   const uint8_t *session_info_string = reinterpret_cast<const uint8_t *>("session info");
-  int ret = mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), TestConstants::EXPECTED_SESSION_KEY, 16,
-                            session_info_string, strlen("session info"), session_info_key);
-  ASSERT_EQ(ret, 0) << "Failed to derive session info key";
+  auto status = CryptoUtils::hmac_sha256(TestConstants::EXPECTED_SESSION_KEY, 16, session_info_string,
+                                         strlen("session info"), session_info_key, sizeof(session_info_key));
+  ASSERT_EQ(status, TeslaBLE_Status_E_OK) << "Failed to derive session info key";
 
   // Expected result from protocol spec example
   std::string expected_session_info_key_hex = "fceb679ee7bca756fcd441bf238bf2f338629b41d9eb9c67be1b32c9672ce300";
@@ -150,35 +147,28 @@ TEST_F(ProtocolVectorsTest, AesGcmEncryptionVectors) {
 
   // Hash the metadata for AAD
   uint8_t aad[32];
-  int ret = mbedtls_sha256(metadata, metadata_length, aad, 0);
-  ASSERT_EQ(ret, 0) << "Failed to hash metadata";
-
-  // Test encryption using the session key
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-
-  ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, TestConstants::EXPECTED_SESSION_KEY, 128);
-  ASSERT_EQ(ret, 0) << "Failed to set GCM key";
+  ASSERT_EQ(CryptoUtils::sha256_hash(metadata, metadata_length, aad), TeslaBLE_Status_E_OK)
+      << "Failed to hash metadata";
 
   // Use a test nonce (in real implementation, this would be random)
   uint8_t nonce[12] = {0xdb, 0xf7, 0x94, 0x47, 0xfa, 0x15, 0x66, 0x74, 0xda, 0xe1, 0xca, 0xed};
   uint8_t ciphertext[16];
   uint8_t tag[16];
 
-  ret = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, sizeof(plaintext), nonce, sizeof(nonce), aad, sizeof(aad),
-                                  plaintext, ciphertext, sizeof(tag), tag);
-  ASSERT_EQ(ret, 0) << "GCM encryption failed";
+  ASSERT_EQ(CryptoUtils::aes_gcm_encrypt(TestConstants::EXPECTED_SESSION_KEY, nonce, aad, sizeof(aad), plaintext,
+                                         sizeof(plaintext), ciphertext, sizeof(ciphertext), tag),
+            TeslaBLE_Status_E_OK)
+      << "GCM encryption failed";
 
   // Test decryption
   uint8_t decrypted[16];
-  ret = mbedtls_gcm_auth_decrypt(&gcm, sizeof(plaintext), nonce, sizeof(nonce), aad, sizeof(aad), tag, sizeof(tag),
-                                 ciphertext, decrypted);
-  ASSERT_EQ(ret, 0) << "GCM decryption failed";
+  ASSERT_EQ(CryptoUtils::aes_gcm_decrypt(TestConstants::EXPECTED_SESSION_KEY, nonce, aad, sizeof(aad), ciphertext,
+                                         sizeof(plaintext), tag, decrypted, sizeof(decrypted)),
+            TeslaBLE_Status_E_OK)
+      << "GCM decryption failed";
 
   // Verify round-trip
   EXPECT_EQ(memcmp(plaintext, decrypted, sizeof(plaintext)), 0) << "AES-GCM round-trip failed";
-
-  mbedtls_gcm_free(&gcm);
 }
 
 // Test 5: HMAC-SHA256 Authentication Method
@@ -189,9 +179,9 @@ TEST_F(ProtocolVectorsTest, HmacSha256Authentication) {
   uint8_t hmac_key[32];
   const uint8_t *auth_command_string = reinterpret_cast<const uint8_t *>("authenticated command");
 
-  int ret = mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), TestConstants::EXPECTED_SESSION_KEY, 16,
-                            auth_command_string, strlen("authenticated command"), hmac_key);
-  ASSERT_EQ(ret, 0) << "Failed to derive HMAC key";
+  auto status = CryptoUtils::hmac_sha256(TestConstants::EXPECTED_SESSION_KEY, 16, auth_command_string,
+                                         strlen("authenticated command"), hmac_key, sizeof(hmac_key));
+  ASSERT_EQ(status, TeslaBLE_Status_E_OK) << "Failed to derive HMAC key";
 
   // Test message + metadata HMAC
   const char *test_message = "120452020801";  // HVAC command
@@ -209,9 +199,9 @@ TEST_F(ProtocolVectorsTest, HmacSha256Authentication) {
   memcpy(combined + metadata_length, message, sizeof(message));
 
   uint8_t hmac_tag[32];
-  ret = mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), hmac_key, 32, combined,
-                        metadata_length + sizeof(message), hmac_tag);
-  ASSERT_EQ(ret, 0) << "Failed to compute HMAC tag";
+  status =
+      CryptoUtils::hmac_sha256(hmac_key, 32, combined, metadata_length + sizeof(message), hmac_tag, sizeof(hmac_tag));
+  ASSERT_EQ(status, TeslaBLE_Status_E_OK) << "Failed to compute HMAC tag";
 
   // Verify tag is computed (specific expected value would need to be calculated)
   EXPECT_NE(bytes_to_hex_(hmac_tag, 32), std::string(64, '0')) << "HMAC tag should not be all zeros";

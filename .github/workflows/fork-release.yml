@@ -25,6 +25,11 @@ jobs:
         run: cmake -B build -DCMAKE_MESSAGE_LOG_LEVEL=ERROR && cmake --build build -j
       - name: Test
         run: cd build && ctest -j --output-on-failure
+      # The same suite against Mbed TLS 4.1 (TF-PSA-Crypto), which ESP-IDF 6.x ships
+      - name: Build (Mbed TLS 4)
+        run: cmake -B build-mbedtls4 -DTESLABLE_MBEDTLS_4=ON -DCMAKE_MESSAGE_LOG_LEVEL=ERROR && cmake --build build-mbedtls4 -j
+      - name: Test (Mbed TLS 4)
+        run: cd build-mbedtls4 && ctest -j --output-on-failure
 
   release:
     needs: test

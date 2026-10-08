@@ -10,12 +10,14 @@
 
 #include <gtest/gtest.h>
 #include <crypto_context.h>
+#include <psa/crypto.h>
+#include "crypto_test_support.h"
+#if TESLABLE_TEST_HAS_LEGACY_CRYPTO
 #include <mbedtls/gcm.h>
 #include <mbedtls/md.h>
 #include <mbedtls/pk.h>
-#include <mbedtls/sha1.h>
 #include <mbedtls/sha256.h>
-#include <psa/crypto.h>
+#endif
 #include <cstring>
 #include <string>
 #include "test_constants.h"
@@ -41,9 +43,11 @@ std::string to_hex(const uint8_t *data, size_t length) {
   return out;
 }
 
+#if TESLABLE_TEST_HAS_LEGACY_CRYPTO
 int legacy_rng(void * /*unused*/, unsigned char *output, size_t length) {
   return psa_generate_random(output, length) == PSA_SUCCESS ? 0 : -1;
 }
+#endif
 
 // Protocol spec example: "Turn HVAC on" with its metadata.
 const char *const PLAINTEXT_HEX = "120452020801";
@@ -65,6 +69,14 @@ TEST_F(PsaCryptoTest, Sha1KnownAnswer) {
   EXPECT_EQ(to_hex(out, sizeof(out)), "a9993e364706816aba3e25717850c26c9cd0d89d");
 }
 
+TEST_F(PsaCryptoTest, Sha256KnownAnswer) {
+  const char *input = "abc";
+  uint8_t out[32];
+  ASSERT_EQ(CryptoUtils::sha256_hash(reinterpret_cast<const pb_byte_t *>(input), 3, out), TeslaBLE_Status_E_OK);
+  EXPECT_EQ(to_hex(out, sizeof(out)), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+#if TESLABLE_TEST_HAS_LEGACY_CRYPTO
 TEST_F(PsaCryptoTest, Sha256MatchesLegacy) {
   auto metadata = from_hex(METADATA_HEX);
   uint8_t psa_out[32];
@@ -73,6 +85,7 @@ TEST_F(PsaCryptoTest, Sha256MatchesLegacy) {
   ASSERT_EQ(mbedtls_sha256(metadata.data(), metadata.size(), legacy_out, 0), 0);
   EXPECT_EQ(to_hex(psa_out, 32), to_hex(legacy_out, 32));
 }
+#endif
 
 TEST_F(PsaCryptoTest, SessionInfoKeyMatchesSpec) {
   uint8_t key[32];
@@ -81,6 +94,7 @@ TEST_F(PsaCryptoTest, SessionInfoKeyMatchesSpec) {
   EXPECT_EQ(to_hex(key, sizeof(key)), "fceb679ee7bca756fcd441bf238bf2f338629b41d9eb9c67be1b32c9672ce300");
 }
 
+#if TESLABLE_TEST_HAS_LEGACY_CRYPTO
 TEST_F(PsaCryptoTest, HmacMatchesLegacy) {
   auto metadata = from_hex(METADATA_HEX);
   uint8_t psa_out[32];
@@ -93,6 +107,7 @@ TEST_F(PsaCryptoTest, HmacMatchesLegacy) {
             0);
   EXPECT_EQ(to_hex(psa_out, 32), to_hex(legacy_out, 32));
 }
+#endif
 
 TEST_F(PsaCryptoTest, AesGcmMatchesLegacyAndRoundTrips) {
   auto plaintext = from_hex(PLAINTEXT_HEX);
@@ -107,6 +122,11 @@ TEST_F(PsaCryptoTest, AesGcmMatchesLegacyAndRoundTrips) {
                                          plaintext.size(), ciphertext.data(), ciphertext.size(), tag),
             TeslaBLE_Status_E_OK);
 
+  // Known answer, computed independently (Python cryptography, AESGCM).
+  EXPECT_EQ(to_hex(ciphertext.data(), ciphertext.size()), "38038e8c0f2e");
+  EXPECT_EQ(to_hex(tag, 16), "8e128da165f162f4d7d2c8da866cf82a");
+
+#if TESLABLE_TEST_HAS_LEGACY_CRYPTO
   // Legacy reference
   std::vector<uint8_t> legacy_ciphertext(plaintext.size());
   uint8_t legacy_tag[16];
@@ -121,6 +141,7 @@ TEST_F(PsaCryptoTest, AesGcmMatchesLegacyAndRoundTrips) {
 
   EXPECT_EQ(to_hex(ciphertext.data(), ciphertext.size()), to_hex(legacy_ciphertext.data(), legacy_ciphertext.size()));
   EXPECT_EQ(to_hex(tag, 16), to_hex(legacy_tag, 16));
+#endif
 
   std::vector<uint8_t> decrypted(plaintext.size());
   ASSERT_EQ(CryptoUtils::aes_gcm_decrypt(TestConstants::EXPECTED_SESSION_KEY, NONCE, aad, sizeof(aad),
@@ -172,6 +193,11 @@ TEST_F(PsaCryptoTest, PemStorageMatchesLegacyFormat) {
   size_t pem_out_length = 0;
   ASSERT_EQ(crypto.get_private_key(pem_out, sizeof(pem_out), &pem_out_length), TeslaBLE_Status_E_OK);
 
+  // The stored format is the SEC1 PEM it was loaded from (plus the writer's
+  // trailing newline), on any Mbed TLS version.
+  EXPECT_EQ(std::string(reinterpret_cast<char *>(pem_out)), std::string(pem) + "\n");
+
+#if TESLABLE_TEST_HAS_LEGACY_CRYPTO
   mbedtls_pk_context legacy;
   mbedtls_pk_init(&legacy);
   ASSERT_EQ(mbedtls_pk_parse_key(&legacy, reinterpret_cast<const uint8_t *>(pem), std::strlen(pem) + 1, nullptr, 0,
@@ -182,6 +208,7 @@ TEST_F(PsaCryptoTest, PemStorageMatchesLegacyFormat) {
   mbedtls_pk_free(&legacy);
 
   EXPECT_STREQ(reinterpret_cast<char *>(pem_out), reinterpret_cast<char *>(legacy_pem));
+#endif
 
   uint8_t public_key[65];
   size_t public_key_length = sizeof(public_key);
@@ -223,10 +250,12 @@ TEST_F(PsaCryptoTest, GeneratedKeyRoundTripsAndAgrees) {
   ASSERT_EQ(reloaded.generate_public_key(pub_reloaded, &len_reloaded), TeslaBLE_Status_E_OK);
   EXPECT_EQ(to_hex(pub_a, 65), to_hex(pub_reloaded, 65));
 
+#if TESLABLE_TEST_HAS_LEGACY_CRYPTO
   mbedtls_pk_context legacy;
   mbedtls_pk_init(&legacy);
   EXPECT_EQ(mbedtls_pk_parse_key(&legacy, pem, pem_length, nullptr, 0, legacy_rng, nullptr), 0);
   mbedtls_pk_free(&legacy);
+#endif
 }
 
 TEST_F(PsaCryptoTest, MoveTransfersKeyOwnership) {

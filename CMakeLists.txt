@@ -141,12 +141,28 @@ else()
         GIT_TAG 0.4.9.1
         GIT_SHALLOW TRUE
     )
-    FetchContent_Declare(
-        mbedtls
-        GIT_REPOSITORY https://github.com/espressif/mbedtls.git
-        GIT_TAG mbedtls-3.6.6-idf
-        GIT_SHALLOW TRUE
-    )
+    # Mbed TLS 3.6 (ESP-IDF 5.x) by default. TESLABLE_MBEDTLS_4=ON builds and
+    # tests against Mbed TLS 4.1 (TF-PSA-Crypto), the version ESP-IDF 6.1 ships.
+    option(TESLABLE_MBEDTLS_4 "Build against Mbed TLS 4.x instead of 3.6" OFF)
+    if(TESLABLE_MBEDTLS_4)
+        # Release tarball: unlike a git checkout it has the generated sources
+        # (no Python generator dependencies) and includes TF-PSA-Crypto.
+        FetchContent_Declare(
+            mbedtls
+            URL https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-4.1.0/mbedtls-4.1.0.tar.bz2
+            URL_HASH SHA256=377a09cf8eb81b5fb2707045e5522d5489d3309fed5006c9874e60558fc81d10
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        )
+        set(TESLABLE_MBEDTLS_LIBS tfpsacrypto mbedtls mbedx509)
+    else()
+        FetchContent_Declare(
+            mbedtls
+            GIT_REPOSITORY https://github.com/espressif/mbedtls.git
+            GIT_TAG mbedtls-3.6.6-idf
+            GIT_SHALLOW TRUE
+        )
+        set(TESLABLE_MBEDTLS_LIBS mbedcrypto mbedtls mbedx509)
+    endif()
     FetchContent_MakeAvailable(nanopb mbedtls)
 
     set(CMAKE_MODULE_PATH ${nanopb_SOURCE_DIR}/extra)
@@ -178,7 +194,7 @@ else()
              ${NANOPB_INCLUDE_DIRS}
      )
     
-    target_link_libraries(TeslaBLE PUBLIC mbedcrypto mbedtls mbedx509)
+    target_link_libraries(TeslaBLE PUBLIC ${TESLABLE_MBEDTLS_LIBS})
 
     # Strict warnings for the library's own C++ sources. Scoped to this target and
     # language so third-party deps (mbedtls, nanopb) and generated .pb.c files are
