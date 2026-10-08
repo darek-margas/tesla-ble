@@ -1,4 +1,13 @@
-## tesla-ble fork v5.2.0-dm.7: compile-time log level, ESP32-C5; session request resend; crash fix; wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+## tesla-ble fork v5.2.0-dm.8: car responses authenticated, PSA crypto; log level, ESP32-C5; session request resend; crash fix; wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+
+### Security fix in dm.8
+- **Responses from the car are now authenticated.** Encrypted responses were decrypted but their AES-GCM tag was never checked: with the Mbed TLS GCM API the received tag was passed as the output buffer of `mbedtls_gcm_finish()`, which overwrote it with the computed tag instead of comparing the two. A corrupted or forged response would have been accepted. The tag is now verified, and the authenticated data uses the counter the car sends in the response (`AES_GCM_ResponseData.counter`), not our own request counter; with the old counter every response fails once the check is on. This affects all earlier versions, upstream included.
+
+### Changed in dm.8
+- **Crypto ported to the PSA API** (P-256 key agreement, AES-GCM, SHA-1/SHA-256, HMAC), so the library builds with Mbed TLS 3.6 (ESP-IDF 5.x) and Mbed TLS 4 (ESP-IDF 6). Stored private keys keep their format: existing pairings keep working, no re-pairing (tested on a classic ESP32 with ESP-IDF 5.5 and two paired cars, and on an ESP32-C5 with ESP-IDF 6.1).
+- **Needs ESP-IDF 5.3 or newer** (ESPHome 2026.9 uses 5.5).
+
+By @davidcoulson.
 
 ### Added in dm.7
 - **Compile-time log level** `TESLA_BLE_LOG_LEVEL` (0 = error, 1 = warn, 2 = info, 3 = debug, 4 = verbose, the default). Messages above it are left out of the build, so their texts take no flash. Without the define nothing changes. esphome-tesla-ble-multi sets it from the ESPHome logger level.
@@ -60,13 +69,14 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v5.2.0-dm.7
+        ref: v5.2.0-dm.8
 ```
 
 ### Branches and roll back
 - `multicar`: the fork's changes (the default branch).
 - `main`: mirrors upstream, to sync from.
 - Tags are never moved.
+  - To roll back to dm.7 (Mbed TLS GCM API, response tags not verified; also for ESP-IDF older than 5.3), use `v5.2.0-dm.7`.
   - To roll back to dm.6 (no compile-time log level), use `v5.2.0-dm.6`.
   - To roll back to dm.5 (session request not resent: first command after a wake may wait 25 s), use `v5.2.0-dm.5`.
   - To roll back to dm.4 (without the crash fix), use `v5.2.0-dm.4`.
