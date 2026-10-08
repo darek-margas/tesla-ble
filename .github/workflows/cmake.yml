@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: ["main", "develop"]
+    branches: ["main", "develop", "multicar"]
   pull_request:
-    branches: ["main", "develop"]
+    branches: ["main", "develop", "multicar"]
 
 # Prevent redundant runs on the same branch
 concurrency:
