@@ -206,7 +206,7 @@ TEST_F(ProtocolHandshakeTest, ResponseDecryption) {
   memcpy(request_hash + 1, mock_tag, 16);  // Use same tag for simplicity
 
   uint8_t decrypted[256];
-  size_t decrypted_length;
+  size_t decrypted_length = 0;
 
   int decrypt_result = peer.decrypt_response(mock_encrypted_data, sizeof(mock_encrypted_data), mock_nonce, mock_tag,
                                              request_hash, sizeof(request_hash),
@@ -215,14 +215,12 @@ TEST_F(ProtocolHandshakeTest, ResponseDecryption) {
                                              0,  // response counter
                                              decrypted, sizeof(decrypted), &decrypted_length);
 
-  // The exact result depends on the mock data being valid
-  // But we should get a meaningful response
-  EXPECT_TRUE(decrypt_result == TeslaBLE_Status_E_OK || decrypt_result != TeslaBLE_Status_E_OK)
-      << "Decryption should either succeed or fail gracefully";
-
-  if (result == TeslaBLE_Status_E_OK) {
-    EXPECT_GT(decrypted_length, 0) << "Successful decryption should produce content";
-  }
+  // The mock tag was not produced with the session key, so the GCM tag check
+  // must reject the response. (This used to check `result`, the key load, and
+  // then read decrypted_length uninitialised: once the tag was verified, the
+  // test passed or failed depending on stack contents.)
+  EXPECT_NE(decrypt_result, TeslaBLE_Status_E_OK) << "A response with a forged tag must be rejected";
+  EXPECT_EQ(decrypted_length, 0u) << "Nothing may be output from a rejected response";
 }
 
 TEST_F(ProtocolHandshakeTest, VcsecResponseDecryptRoundTrip) {
