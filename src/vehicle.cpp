@@ -977,7 +977,11 @@ void TeslaBLE::Vehicle::handle_carserver_message_(const UniversalMessage_Routabl
                                         &expected_uuid_length) ||
         msg.request_uuid.size != expected_uuid_length ||
         !std::equal(msg.request_uuid.bytes, msg.request_uuid.bytes + msg.request_uuid.size, expected_uuid)) {
-      LOG_WARNING("Ignoring CarServer response for a different request");
+      // A late reply to an earlier request (e.g. a poll the car answered
+      // after it had been resent or given up on). Dropping it is correct and
+      // the current command reports its own outcome, so this is not a
+      // warning: with polls in a batch it is routine.
+      LOG_DEBUG("Ignoring CarServer response for a different request");
       return;
     }
   }
