@@ -239,9 +239,9 @@ TEST_F(MessageParsingTest, ParsePayloadCarServerResponseMediaState) {
   CarServer_Response parsed_response = CarServer_Response_init_default;
   Signatures_SignatureData signature_data = Signatures_SignatureData_init_default;
   MediaNowPlaying now_playing;
-  auto result = client_->parse_payload_car_server_response(
-      &input_buffer, &signature_data, 0, UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_NONE, 0, &parsed_response,
-      nullptr, &now_playing);
+  auto result = client_->parse_payload_car_server_response(&input_buffer, &signature_data, 0,
+                                                           UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_NONE, 0,
+                                                           &parsed_response, nullptr, &now_playing);
 
   ASSERT_EQ(result, TeslaBLE_Status_E_OK);
   ASSERT_EQ(parsed_response.which_response_msg, CarServer_Response_vehicleData_tag);

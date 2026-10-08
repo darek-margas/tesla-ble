@@ -551,8 +551,7 @@ void TeslaBLE::Vehicle::process_ready_command_(const std::shared_ptr<Command> &c
   if (command->resend_encoded && !command->encoded_request.empty()) {
     command->resend_encoded = false;
     if (ble_adapter_->write(command->encoded_request)) {
-      LOG_DEBUG("Resent command: %s (%zu bytes, same message)", command->name.c_str(),
-                command->encoded_request.size());
+      LOG_DEBUG("Resent command: %s (%zu bytes, same message)", command->name.c_str(), command->encoded_request.size());
       command->state = CommandState::WAITING_FOR_RESPONSE;
       set_command_phase_(command, OperationPhase::AWAITING_RESPONSE);
       command->last_tx_at = std::chrono::steady_clock::now();
