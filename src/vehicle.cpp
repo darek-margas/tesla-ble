@@ -302,6 +302,19 @@ void TeslaBLE::Vehicle::process_authenticating_command_(const std::shared_ptr<Co
 
 void TeslaBLE::Vehicle::process_auth_response_waiting_command_(const std::shared_ptr<Command> &command) {
   auto now = std::chrono::steady_clock::now();
+  // Session info request not answered yet: send the same bytes again (same
+  // request id, so whichever copy the car answers is accepted). The overall
+  // wait is still AUTH_RESPONSE_TIMEOUT from the first send.
+  if (command->current_auth_domain == command->auth_request_domain &&
+      command->current_auth_domain != UniversalMessage_Domain_DOMAIN_BROADCAST && !command->auth_request.empty() &&
+      command->auth_resends < MAX_AUTH_RESENDS && now - command->auth_resend_at >= TRANSPORT_RETRY_INTERVAL) {
+    if (ble_adapter_->write(command->auth_request)) {
+      command->auth_resends++;
+      LOG_DEBUG("Resent %s Session Info Request (%d/%d)", domain_to_string(command->current_auth_domain),
+                command->auth_resends, MAX_AUTH_RESENDS);
+    }
+    command->auth_resend_at = now;
+  }
   auto tx_duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - command->last_tx_at);
   if (tx_duration > AUTH_RESPONSE_TIMEOUT) {
     switch (command->current_auth_domain) {
@@ -378,6 +391,8 @@ void TeslaBLE::Vehicle::initiate_auth_for_domain_(const std::shared_ptr<Command>
       resume_command_after_prerequisite_(command);
     }
   } else {
+    // A new session means a new counter: the request must be built again
+    command->resend_encoded = false;
     std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
     size_t len = buffer.size();
     if (client_->build_session_info_request_message(domain, buffer.data(), &len) == 0) {
@@ -385,6 +400,10 @@ void TeslaBLE::Vehicle::initiate_auth_for_domain_(const std::shared_ptr<Command>
       if (ble_adapter_->write(data)) {
         command->state = waiting_state;
         command->last_tx_at = std::chrono::steady_clock::now();
+        command->auth_request = std::move(data);
+        command->auth_request_domain = domain;
+        command->auth_resend_at = command->last_tx_at;
+        command->auth_resends = 0;
         LOG_INFO("Sent %s Session Info Request", domain_name.c_str());
       } else {
         LOG_ERROR("Failed to write %s Session Info Request", domain_name.c_str());
@@ -457,6 +476,7 @@ void TeslaBLE::Vehicle::resume_command_after_prerequisite_(const std::shared_ptr
 
 void TeslaBLE::Vehicle::initiate_wake_sequence_(const std::shared_ptr<Command> &command) {
   set_command_phase_(command, OperationPhase::ENSURING_AWAKE);
+  command->resend_encoded = false;
   std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
   size_t len = buffer.size();
   if (client_->build_vcsec_action_message(VCSEC_RKEAction_E_RKE_ACTION_WAKE_VEHICLE, buffer.data(), &len) == 0) {
@@ -515,21 +535,39 @@ void TeslaBLE::Vehicle::retry_command(const std::shared_ptr<Command> &command) {
   set_command_phase_(command, OperationPhase::QUEUED);
   switch (command->state) {
     case CommandState::WAITING_FOR_RESPONSE:
+      // No reply in time, session unchanged: send the same message again
       command->state = CommandState::READY;
+      command->resend_encoded = true;
       break;
     case CommandState::AUTH_RESPONSE_WAITING:
     default:
       command->state = CommandState::IDLE;
+      command->resend_encoded = false;
       break;
   }
 }
 
 void TeslaBLE::Vehicle::process_ready_command_(const std::shared_ptr<Command> &command) {
   set_command_phase_(command, OperationPhase::SENDING_REQUEST);
+  if (command->resend_encoded && !command->encoded_request.empty()) {
+    command->resend_encoded = false;
+    if (ble_adapter_->write(command->encoded_request)) {
+      LOG_DEBUG("Resent command: %s (%zu bytes, same message)", command->name.c_str(), command->encoded_request.size());
+      command->state = CommandState::WAITING_FOR_RESPONSE;
+      set_command_phase_(command, OperationPhase::AWAITING_RESPONSE);
+      command->last_tx_at = std::chrono::steady_clock::now();
+    } else {
+      LOG_ERROR("Failed to write command data: %s", command->name.c_str());
+      mark_command_failed_(command, CommandError::build_failed("BLE write failed"));
+    }
+    return;
+  }
+  command->resend_encoded = false;
   std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
   size_t len = buffer.size();
   if (command->builder(client_.get(), buffer.data(), &len) == 0) {
     std::vector<uint8_t> data(buffer.begin(), buffer.begin() + len);
+    command->encoded_request = data;
     if (ble_adapter_->write(data)) {
       LOG_DEBUG("Sent command: %s (%zu bytes)", command->name.c_str(), data.size());
       command->state = CommandState::WAITING_FOR_RESPONSE;
@@ -715,6 +753,7 @@ void TeslaBLE::Vehicle::handle_message_(const UniversalMessage_RoutableMessage &
         (cmd->state == CommandState::WAITING_FOR_RESPONSE || cmd->state == CommandState::AUTH_RESPONSE_WAITING)) {
       LOG_INFO("Retrying command after session recovery");
       cmd->state = CommandState::IDLE;
+      cmd->resend_encoded = false;
       cmd->retry_count++;
       if (cmd->retry_count > MAX_RETRIES) {
         mark_command_failed_(cmd, CommandError::session_expired("session recovery"));
@@ -727,6 +766,7 @@ void TeslaBLE::Vehicle::handle_message_(const UniversalMessage_RoutableMessage &
       (cmd->state == CommandState::WAITING_FOR_RESPONSE || cmd->state == CommandState::AUTH_RESPONSE_WAITING)) {
     LOG_INFO("Transitioning to IDLE to trigger manual session recovery");
     cmd->state = CommandState::IDLE;
+    cmd->resend_encoded = false;
   }
   if (msg.from_destination.which_sub_destination == UniversalMessage_Destination_domain_tag) {
     switch (msg.from_destination.sub_destination.domain) {
@@ -1100,6 +1140,15 @@ void TeslaBLE::Vehicle::handle_vehicle_status_command_update_(const std::shared_
                                                               const VCSEC_VehicleStatus &status) {
   switch (cmd->state) {
     case CommandState::AUTH_RESPONSE_WAITING:
+      // An infotainment command reacts only while it waits for the wake. A
+      // waking car sends a burst of status updates; once the infotainment
+      // session request is out, each of them used to restart the auth and send
+      // another session request (5 in 0.6 s seen on a car), all queued behind
+      // each other.
+      if (cmd->domain == UniversalMessage_Domain_DOMAIN_INFOTAINMENT &&
+          cmd->current_auth_domain != UniversalMessage_Domain_DOMAIN_BROADCAST) {
+        break;
+      }
       if (is_vehicle_observed_awake_() || status.has_closureStatuses) {
         LOG_INFO("Vehicle is awake");
         if (cmd->domain == UniversalMessage_Domain_DOMAIN_INFOTAINMENT) {
