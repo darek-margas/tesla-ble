@@ -462,6 +462,7 @@ int Peer::decrypt_response(const pb_byte_t *input_buffer, size_t input_length, c
 
   if (return_code != 0) {
     LOG_ERROR("[DecryptResponse] Failed to construct AD buffer");
+    mbedtls_gcm_free(&aes_context);
     return return_code;
   }
 

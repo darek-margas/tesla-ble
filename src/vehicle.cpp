@@ -394,10 +394,10 @@ void TeslaBLE::Vehicle::initiate_auth_for_domain_(const std::shared_ptr<Command>
   } else {
     // A new session means a new counter: the request must be built again
     command->resend_encoded = false;
-    uint8_t buffer[256];
-    size_t len = 256;
-    if (client_->build_session_info_request_message(domain, buffer, &len) == 0) {
-      std::vector<uint8_t> data(buffer, buffer + len);
+    std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
+    size_t len = buffer.size();
+    if (client_->build_session_info_request_message(domain, buffer.data(), &len) == 0) {
+      std::vector<uint8_t> data(buffer.begin(), buffer.begin() + len);
       if (ble_adapter_->write(data)) {
         command->state = waiting_state;
         command->last_tx_at = std::chrono::steady_clock::now();
@@ -478,10 +478,10 @@ void TeslaBLE::Vehicle::resume_command_after_prerequisite_(const std::shared_ptr
 void TeslaBLE::Vehicle::initiate_wake_sequence_(const std::shared_ptr<Command> &command) {
   set_command_phase_(command, OperationPhase::ENSURING_AWAKE);
   command->resend_encoded = false;
-  uint8_t buffer[256];
-  size_t len = 256;
-  if (client_->build_vcsec_action_message(VCSEC_RKEAction_E_RKE_ACTION_WAKE_VEHICLE, buffer, &len) == 0) {
-    std::vector<uint8_t> data(buffer, buffer + len);
+  std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
+  size_t len = buffer.size();
+  if (client_->build_vcsec_action_message(VCSEC_RKEAction_E_RKE_ACTION_WAKE_VEHICLE, buffer.data(), &len) == 0) {
+    std::vector<uint8_t> data(buffer.begin(), buffer.begin() + len);
     if (ble_adapter_->write(data)) {
       command->state = CommandState::AUTH_RESPONSE_WAITING;
       command->last_tx_at = std::chrono::steady_clock::now();
@@ -564,10 +564,10 @@ void TeslaBLE::Vehicle::process_ready_command_(const std::shared_ptr<Command> &c
     return;
   }
   command->resend_encoded = false;
-  uint8_t buffer[256];
-  size_t len = 256;
-  if (command->builder(client_.get(), buffer, &len) == 0) {
-    std::vector<uint8_t> data(buffer, buffer + len);
+  std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
+  size_t len = buffer.size();
+  if (command->builder(client_.get(), buffer.data(), &len) == 0) {
+    std::vector<uint8_t> data(buffer.begin(), buffer.begin() + len);
     command->encoded_request = data;
     if (ble_adapter_->write(data)) {
       LOG_DEBUG("Sent command: %s (%zu bytes)", command->name.c_str(), data.size());
