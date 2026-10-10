@@ -38,6 +38,78 @@ namespace {
 // Must be long enough for BLE transmission + clock drift between
 // ESP32 and vehicle, but short enough to limit replay attacks.
 constexpr int EXPIRES_AT_SECONDS = 5;
+
+// Minimal protobuf wire-format walker, for fields the generated structs do not keep
+// (unbounded strings). Never reads past [pos, end).
+bool read_wire_varint(const pb_byte_t *&pos, const pb_byte_t *end, uint64_t *value) {
+  *value = 0;
+  for (unsigned shift = 0; shift < 64 && pos < end; shift += 7) {
+    pb_byte_t byte = *pos++;
+    *value |= static_cast<uint64_t>(byte & 0x7F) << shift;
+    if ((byte & 0x80) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Finds the last length-delimited field `field_number` in [data, data + length).
+// Returns false if it is missing or the bytes are malformed.
+bool find_wire_bytes(const pb_byte_t *data, size_t length, uint32_t field_number, const pb_byte_t **out,
+                     size_t *out_length) {
+  const pb_byte_t *pos = data;
+  const pb_byte_t *end = data + length;
+  bool found = false;
+  while (pos < end) {
+    uint64_t key = 0;
+    if (!read_wire_varint(pos, end, &key)) {
+      return false;
+    }
+    uint64_t skip = 0;
+    switch (static_cast<pb_wire_type_t>(key & 0x07)) {
+      case PB_WT_VARINT:
+        if (!read_wire_varint(pos, end, &skip)) {
+          return false;
+        }
+        skip = 0;
+        break;
+      case PB_WT_64BIT:
+        skip = 8;
+        break;
+      case PB_WT_32BIT:
+        skip = 4;
+        break;
+      case PB_WT_STRING:
+        if (!read_wire_varint(pos, end, &skip)) {
+          return false;
+        }
+        if (skip <= static_cast<uint64_t>(end - pos) && (key >> 3) == field_number) {
+          *out = pos;
+          *out_length = static_cast<size_t>(skip);
+          found = true;
+        }
+        break;
+      default:
+        return false;
+    }
+    if (skip > static_cast<uint64_t>(end - pos)) {
+      return false;
+    }
+    pos += skip;
+  }
+  return found;
+}
+
+// Copies at most max_length bytes, cut back to a UTF-8 character boundary.
+std::string truncate_utf8(const pb_byte_t *data, size_t length, size_t max_length) {
+  if (length > max_length) {
+    length = max_length;
+    while (length > 0 && (data[length] & 0xC0) == 0x80) {
+      --length;
+    }
+  }
+  return std::string(reinterpret_cast<const char *>(data), length);
+}
 }  // namespace
 
 namespace TeslaBLE {
@@ -323,11 +395,40 @@ int Client::parse_payload_session_info(UniversalMessage_RoutableMessage_session_
   return TeslaBLE_Status_E_OK;
 }
 
+bool extract_media_now_playing(const pb_byte_t *response, size_t length, MediaNowPlaying *output) {
+  if (!response || !output) {
+    return false;
+  }
+  *output = MediaNowPlaying();
+  const pb_byte_t *vehicle_data = nullptr;
+  size_t vehicle_data_length = 0;
+  const pb_byte_t *media_state = nullptr;
+  size_t media_state_length = 0;
+  if (!find_wire_bytes(response, length, CarServer_Response_vehicleData_tag, &vehicle_data, &vehicle_data_length) ||
+      !find_wire_bytes(vehicle_data, vehicle_data_length, CarServer_VehicleData_media_state_tag, &media_state,
+                       &media_state_length)) {
+    return false;
+  }
+  const pb_byte_t *text = nullptr;
+  size_t text_length = 0;
+  if (find_wire_bytes(media_state, media_state_length, CarServer_MediaState_now_playing_artist_tag, &text,
+                      &text_length)) {
+    output->has_artist = true;
+    output->artist = truncate_utf8(text, text_length, MediaNowPlaying::MAX_LENGTH);
+  }
+  if (find_wire_bytes(media_state, media_state_length, CarServer_MediaState_now_playing_title_tag, &text,
+                      &text_length)) {
+    output->has_title = true;
+    output->title = truncate_utf8(text, text_length, MediaNowPlaying::MAX_LENGTH);
+  }
+  return true;
+}
+
 int Client::parse_payload_car_server_response(
     UniversalMessage_RoutableMessage_protobuf_message_as_bytes_t *input_buffer,
     Signatures_SignatureData *signature_data, pb_size_t which_sub_sig_data,
     UniversalMessage_MessageFault_E signed_message_fault, uint32_t response_flags, CarServer_Response *output,
-    uint32_t *response_counter) {
+    uint32_t *response_counter, MediaNowPlaying *media_now_playing) {
   uint32_t counter = 0;
 
   // If encrypted, decrypt the payload
@@ -363,6 +464,9 @@ int Client::parse_payload_car_server_response(
           LOG_ERROR("[parse_payload_car_server_response] Decoding failed: %s", PB_GET_ERROR(&stream));
           return TeslaBLE_Status_E_ERROR_PB_DECODING;
         }
+        if (media_now_playing) {
+          extract_media_now_playing(decrypt_buffer.bytes, decrypt_buffer.size, media_now_playing);
+        }
         break;
       }
       default:
@@ -375,6 +479,9 @@ int Client::parse_payload_car_server_response(
     if (!status) {
       LOG_ERROR("[parse_payload_car_server_response] Decoding failed: %s", PB_GET_ERROR(&stream));
       return TeslaBLE_Status_E_ERROR_PB_DECODING;
+    }
+    if (media_now_playing) {
+      extract_media_now_playing(input_buffer->bytes, input_buffer->size, media_now_playing);
     }
   }
 

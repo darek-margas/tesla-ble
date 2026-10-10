@@ -45,6 +45,7 @@ const std::unordered_map<pb_size_t, VehicleActionBuilder::BuilderFunction> &Vehi
       {CarServer_VehicleAction_mediaPreviousFavorite_tag, build_media_previous_favorite},
       {CarServer_VehicleAction_mediaNextTrack_tag, build_media_next_track},
       {CarServer_VehicleAction_mediaPreviousTrack_tag, build_media_previous_track},
+      {CarServer_VehicleAction_mediaUpdateVolume_tag, build_media_update_volume},
       {CarServer_VehicleAction_ping_tag, build_ping_action},
       {CarServer_VehicleAction_vehicleControlWindowAction_tag, build_vehicle_control_window_action},
       {CarServer_VehicleAction_hvacSetPreconditioningMaxAction_tag, build_hvac_set_preconditioning_max},
@@ -55,7 +56,10 @@ const std::unordered_map<pb_size_t, VehicleActionBuilder::BuilderFunction> &Vehi
        build_vehicle_control_schedule_software_update},
       {CarServer_VehicleAction_setCabinOverheatProtectionAction_tag, build_set_cabin_overheat_protection},
       {CarServer_VehicleAction_setLowPowerModeAction_tag, build_set_low_power_mode},
-      {CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, build_set_keep_accessory_power_mode}};
+      {CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, build_set_keep_accessory_power_mode},
+      {CarServer_VehicleAction_guestModeAction_tag, build_set_guest_mode},
+      {CarServer_VehicleAction_setCopTempAction_tag, build_set_cop_temp},
+      {CarServer_VehicleAction_scheduledDepartureAction_tag, build_scheduled_departure}};
   return BUILDERS;
 }
 
@@ -242,6 +246,28 @@ int VehicleActionBuilder::build_media_previous_track(CarServer_VehicleAction &ac
   return TeslaBLE_Status_E_OK;
 }
 
+int VehicleActionBuilder::build_media_update_volume(CarServer_VehicleAction &action, const void *data) {
+  const CarServer_MediaUpdateVolume *volume =
+      require_data<CarServer_MediaUpdateVolume>(data, "Media volume action requires CarServer_MediaUpdateVolume data");
+  if (!volume) {
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+  // As vehicle-command SetVolume (absolute, 0-10) / VolumeUp / VolumeDown (delta)
+  if (volume->which_media_volume == CarServer_MediaUpdateVolume_volume_absolute_float_tag) {
+    float level = volume->media_volume.volume_absolute_float;
+    if (!(level >= 0.0f && level <= 10.0f)) {
+      LOG_ERROR("Invalid media volume: %.2f (must be 0-10)", static_cast<double>(level));
+      return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+    }
+  } else if (volume->which_media_volume != CarServer_MediaUpdateVolume_volume_delta_tag) {
+    LOG_ERROR("Media update volume action needs an absolute volume or a delta");
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+
+  action.vehicle_action_msg.mediaUpdateVolume = *volume;
+  return TeslaBLE_Status_E_OK;
+}
+
 int VehicleActionBuilder::build_ping_action(CarServer_VehicleAction &action, const void *data) {
   const int32_t *ping_value_ptr = require_data<int32_t>(data, "Ping action requires int32_t data");
   if (!ping_value_ptr) {
@@ -381,6 +407,52 @@ int VehicleActionBuilder::build_set_keep_accessory_power_mode(CarServer_VehicleA
 
   action.vehicle_action_msg.setKeepAccessoryPowerModeAction = CarServer_SetKeepAccessoryPowerModeAction_init_default;
   action.vehicle_action_msg.setKeepAccessoryPowerModeAction.keep_accessory_power_mode = *enabled;
+  return TeslaBLE_Status_E_OK;
+}
+
+int VehicleActionBuilder::build_set_guest_mode(CarServer_VehicleAction &action, const void *data) {
+  const bool *enabled = require_data<bool>(data, "Set guest mode action requires boolean data");
+  if (!enabled) {
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+
+  action.vehicle_action_msg.guestModeAction = CarServer_VehicleState_GuestMode_init_default;
+  action.vehicle_action_msg.guestModeAction.GuestModeActive = *enabled;
+  return TeslaBLE_Status_E_OK;
+}
+
+int VehicleActionBuilder::build_set_cop_temp(CarServer_VehicleAction &action, const void *data) {
+  const int32_t *level = require_data<int32_t>(data, "Set cabin overheat protection temperature requires int32_t data");
+  if (!level) {
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+  if (*level < CarServer_ClimateState_CopActivationTemp_CopActivationTempLow ||
+      *level > CarServer_ClimateState_CopActivationTemp_CopActivationTempHigh) {
+    LOG_ERROR("Invalid cabin overheat protection temperature level: %d", static_cast<int>(*level));
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+
+  action.vehicle_action_msg.setCopTempAction = CarServer_SetCopTempAction_init_default;
+  action.vehicle_action_msg.setCopTempAction.copActivationTemp =
+      static_cast<CarServer_ClimateState_CopActivationTemp>(*level);
+  return TeslaBLE_Status_E_OK;
+}
+
+int VehicleActionBuilder::build_scheduled_departure(CarServer_VehicleAction &action, const void *data) {
+  const CarServer_ScheduledDepartureAction *departure = require_data<CarServer_ScheduledDepartureAction>(
+      data, "Scheduled departure action requires CarServer_ScheduledDepartureAction data");
+  if (!departure) {
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+  constexpr int32_t MINUTES_PER_DAY = 24 * 60;
+  if (departure->enabled &&
+      (departure->departure_time < 0 || departure->departure_time >= MINUTES_PER_DAY ||
+       departure->off_peak_hours_end_time < 0 || departure->off_peak_hours_end_time >= MINUTES_PER_DAY)) {
+    LOG_ERROR("Scheduled departure times must be minutes after midnight (0-1439)");
+    return TeslaBLE_Status_E_ERROR_INVALID_PARAMS;
+  }
+
+  action.vehicle_action_msg.scheduledDepartureAction = *departure;
   return TeslaBLE_Status_E_OK;
 }
 

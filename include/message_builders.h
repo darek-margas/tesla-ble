@@ -47,6 +47,7 @@ class VehicleActionBuilder {
   static int build_media_previous_favorite(CarServer_VehicleAction &action, const void *data);
   static int build_media_next_track(CarServer_VehicleAction &action, const void *data);
   static int build_media_previous_track(CarServer_VehicleAction &action, const void *data);
+  static int build_media_update_volume(CarServer_VehicleAction &action, const void *data);
   static int build_ping_action(CarServer_VehicleAction &action, const void *data);
   static int build_vehicle_control_window_action(CarServer_VehicleAction &action, const void *data);
   static int build_hvac_set_preconditioning_max(CarServer_VehicleAction &action, const void *data);
@@ -56,6 +57,9 @@ class VehicleActionBuilder {
   static int build_vehicle_control_schedule_software_update(CarServer_VehicleAction &action, const void *data);
   static int build_set_cabin_overheat_protection(CarServer_VehicleAction &action, const void *data);
   static int build_set_low_power_mode(CarServer_VehicleAction &action, const void *data);
+  static int build_set_guest_mode(CarServer_VehicleAction &action, const void *data);
+  static int build_set_cop_temp(CarServer_VehicleAction &action, const void *data);
+  static int build_scheduled_departure(CarServer_VehicleAction &action, const void *data);
   static int build_set_keep_accessory_power_mode(CarServer_VehicleAction &action, const void *data);
 
   // Map of action types to their builder functions - initialized lazily via get_builders()

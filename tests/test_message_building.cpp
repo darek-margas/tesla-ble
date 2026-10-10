@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <client.h>
 #include <cstring>
+#include <limits>
 #include <universal_message.pb.h>
 #include <vcsec.pb.h>
 #include <signatures.pb.h>
@@ -356,7 +357,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple("setKeepAccessoryPowerModeAction_On",
                         CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, true),
         std::make_tuple("setKeepAccessoryPowerModeAction_Off",
-                        CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, false)),
+                        CarServer_VehicleAction_setKeepAccessoryPowerModeAction_tag, false),
+        std::make_tuple("guestModeAction_On", CarServer_VehicleAction_guestModeAction_tag, true),
+        std::make_tuple("guestModeAction_Off", CarServer_VehicleAction_guestModeAction_tag, false)),
     [](const ::testing::TestParamInfo<VehicleActionBooleanTest::ParamType> &info) { return std::get<0>(info.param); });
 
 // Test numeric vehicle actions
@@ -384,8 +387,94 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple("chargingSetLimitAction_80pct", CarServer_VehicleAction_chargingSetLimitAction_tag, 80),
         std::make_tuple("chargingSetLimitAction_90pct", CarServer_VehicleAction_chargingSetLimitAction_tag, 90),
         std::make_tuple("ping_12345", CarServer_VehicleAction_ping_tag, 12345),
-        std::make_tuple("ping_99999", CarServer_VehicleAction_ping_tag, 99999)),
+        std::make_tuple("ping_99999", CarServer_VehicleAction_ping_tag, 99999),
+        std::make_tuple("setCopTempAction_Low", CarServer_VehicleAction_setCopTempAction_tag, 1),
+        std::make_tuple("setCopTempAction_Medium", CarServer_VehicleAction_setCopTempAction_tag, 2),
+        std::make_tuple("setCopTempAction_High", CarServer_VehicleAction_setCopTempAction_tag, 3)),
     [](const ::testing::TestParamInfo<VehicleActionNumericTest::ParamType> &info) { return std::get<0>(info.param); });
+
+TEST_F(MessageBuildingTest, ScheduledDepartureBuildsAndValidatesTimes) {
+  pb_byte_t buffer[UniversalMessage_RoutableMessage_size];
+  size_t length = 0;
+  CarServer_ScheduledDepartureAction departure = CarServer_ScheduledDepartureAction_init_default;
+  departure.enabled = true;
+  departure.departure_time = 7 * 60 + 30;
+  departure.off_peak_hours_end_time = 6 * 60;
+  departure.has_preconditioning_times = true;
+  departure.preconditioning_times.which_times = CarServer_PreconditioningTimes_weekdays_tag;
+  departure.has_off_peak_charging_times = true;
+  departure.off_peak_charging_times.which_times = CarServer_OffPeakChargingTimes_all_week_tag;
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(
+                buffer, &length, CarServer_VehicleAction_scheduledDepartureAction_tag, &departure),
+            TeslaBLE_Status_E_OK);
+  EXPECT_GT(length, 0);
+
+  CarServer_ScheduledDepartureAction disable = CarServer_ScheduledDepartureAction_init_default;
+  length = 0;
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(
+                buffer, &length, CarServer_VehicleAction_scheduledDepartureAction_tag, &disable),
+            TeslaBLE_Status_E_OK);
+
+  departure.departure_time = 24 * 60;
+  length = 0;
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(
+                buffer, &length, CarServer_VehicleAction_scheduledDepartureAction_tag, &departure),
+            TeslaBLE_Status_E_ERROR_INVALID_PARAMS);
+}
+
+TEST_F(MessageBuildingTest, MediaUpdateVolumeBuildsAndValidates) {
+  pb_byte_t buffer[UniversalMessage_RoutableMessage_size];
+  size_t length = 0;
+  CarServer_MediaUpdateVolume volume = CarServer_MediaUpdateVolume_init_default;
+
+  volume.which_media_volume = CarServer_MediaUpdateVolume_volume_delta_tag;
+  for (int32_t delta : {1, -1}) {
+    volume.media_volume.volume_delta = delta;
+    length = 0;
+    EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                              CarServer_VehicleAction_mediaUpdateVolume_tag, &volume),
+              TeslaBLE_Status_E_OK)
+        << "delta " << delta;
+    EXPECT_GT(length, 0);
+  }
+
+  volume.which_media_volume = CarServer_MediaUpdateVolume_volume_absolute_float_tag;
+  for (float level : {0.0f, 5.5f, 10.0f}) {
+    volume.media_volume.volume_absolute_float = level;
+    length = 0;
+    EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                              CarServer_VehicleAction_mediaUpdateVolume_tag, &volume),
+              TeslaBLE_Status_E_OK)
+        << "level " << level;
+  }
+  for (float level : {-0.5f, 10.5f, std::numeric_limits<float>::quiet_NaN()}) {
+    volume.media_volume.volume_absolute_float = level;
+    length = 0;
+    EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                              CarServer_VehicleAction_mediaUpdateVolume_tag, &volume),
+              TeslaBLE_Status_E_ERROR_INVALID_PARAMS)
+        << "level " << level << " should be rejected";
+  }
+
+  CarServer_MediaUpdateVolume empty = CarServer_MediaUpdateVolume_init_default;
+  length = 0;
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                            CarServer_VehicleAction_mediaUpdateVolume_tag, &empty),
+            TeslaBLE_Status_E_ERROR_INVALID_PARAMS);
+  EXPECT_EQ(client->build_car_server_vehicle_action_message(buffer, &length,
+                                                            CarServer_VehicleAction_mediaUpdateVolume_tag, nullptr),
+            TeslaBLE_Status_E_ERROR_INVALID_PARAMS);
+}
+
+TEST_F(MessageBuildingTest, SetCopTempRejectsOutOfRangeLevels) {
+  pb_byte_t buffer[UniversalMessage_RoutableMessage_size];
+  for (int32_t level : {0, 4, -1}) {
+    size_t length = 0;
+    auto result = client->build_car_server_vehicle_action_message(buffer, &length,
+                                                                  CarServer_VehicleAction_setCopTempAction_tag, &level);
+    EXPECT_EQ(result, TeslaBLE_Status_E_ERROR_INVALID_PARAMS) << "level " << level << " should be rejected";
+  }
+}
 
 TEST_F(MessageBuildingTest, SetCabinOverheatProtectionOn) {
   pb_byte_t buffer[UniversalMessage_RoutableMessage_size];
