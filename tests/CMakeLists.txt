@@ -34,6 +34,7 @@ set(TEST_FILES
     test_logging.cpp
     test_message_building.cpp
     test_message_parsing.cpp
+    test_message_processor.cpp
     test_protocol_authentication.cpp
     test_protocol_edge_cases.cpp
     test_protocol_compliance.cpp
