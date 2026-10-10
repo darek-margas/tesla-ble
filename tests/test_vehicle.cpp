@@ -1700,6 +1700,8 @@ TEST_F(VehicleTest, ResponseTimeoutResendsTheSameMessage) {
   // No reply within the transport retry interval
   command->last_tx_at = std::chrono::steady_clock::now() - std::chrono::seconds(2);
   vehicle_->loop();  // timeout: retry
+  // The retry backoff delays the resend; once it elapses the same bytes go out.
+  command->next_retry_time = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
   vehicle_->loop();  // resend
   ASSERT_EQ(command->state, CommandState::WAITING_FOR_RESPONSE);
   ASSERT_EQ(command->retry_count, 1);
