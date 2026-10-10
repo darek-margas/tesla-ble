@@ -1,4 +1,16 @@
-## tesla-ble fork v5.2.0-dm.9: quieter log, Mbed TLS 4 tests; car responses authenticated, PSA crypto; log level, ESP32-C5; session request resend; crash fix; wake fix and identical resends; media, scheduled departure, guest mode, cabin overheat temperature
+## tesla-ble fork v5.2.0-dm.10: upstream fixes for stuck session requests, message buffers, per-domain request hash and key regeneration
+
+### Changed in dm.10
+Four fixes from upstream (yoziru/tesla-ble), taken into the fork unchanged except where the fork already had its own code:
+- **A stuck session request completes its command once** (#96). When a session request stays unanswered, the command used to be reported finished twice, with two different errors (the reset already cancelled it, then it was failed again). The retry count now rises, so the time limit escalates (30 / 60 / 120 / 300 s) instead of always failing at the first level, and the delay between retries is applied instead of computed and ignored.
+- **Outgoing messages are built in buffers sized for the largest possible message** (#97). They were 256-byte stack buffers with nothing stopping a larger message (up to 741 bytes) from running past the end. Today's messages are under 200 bytes, so nothing overflowed in practice. A payload too big for a message is now rejected.
+- **The last request is kept per domain** (#98). One slot was shared by VCSEC and infotainment, so a request to one overwrote the other and a late reply then failed the authenticity check. New tests cover the encrypted reply path for both domains.
+- **Regenerate key drops the old sessions** (#101). After a new key, the next command authenticates again instead of reusing sessions made with the old key. Session info without a public key no longer marks a session valid, and the session-info challenge length is bounded.
+
+Kept from the fork: the reply authenticity check (dm.8; upstream added its own version as #102), the PSA crypto port, and the late-reply DEBUG log. No change to stored keys: no re-pairing.
+
+Upstream merged this fork's actions and fixes (#90, #94, #95) and @davidcoulson's ESP32-C5 and log level (#92, #93).
+
 
 ### Changed in dm.9
 - **A late reply from the car logs at DEBUG, not WARN.** A response whose request id is not the current one answers an earlier request that was already resent or given up on. Dropping it is correct and the current command reports its own result, so it is no longer a warning (seen several times per poll batch).
