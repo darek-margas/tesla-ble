@@ -301,6 +301,12 @@ class Vehicle {
   bool is_connected() const { return is_connected_; }
   void set_connected(bool connected);
 
+  // Commands queued or still waiting for their reply (the one being worked on
+  // stays at the front until it completes or fails). A host that shares the
+  // radio between cars should not end a car's turn while this is non-zero.
+  // Same name and meaning as upstream tesla-ble v6.
+  size_t pending_command_count() const { return command_queue_.size(); }
+
   void set_awake(bool awake) { sleep_state_ = awake ? SleepState::AWAKE : SleepState::ASLEEP; }
   void set_sleep_state(SleepState state) { sleep_state_ = state; }
   SleepState sleep_state() const { return sleep_state_; }

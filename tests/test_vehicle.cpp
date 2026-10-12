@@ -605,6 +605,25 @@ TEST_F(VehicleTest, ConnectionStateTransitions) {
   ASSERT_FALSE(vehicle_->is_connected());
 }
 
+TEST_F(VehicleTest, PendingCommandCountCoversQueuedAndAwaitingReply) {
+  EXPECT_EQ(vehicle_->pending_command_count(), 0u);
+
+  vehicle_->set_connected(true);
+  vehicle_->vcsec_poll();
+  EXPECT_EQ(vehicle_->pending_command_count(), 1u) << "A queued command is pending";
+
+  vehicle_->loop();
+  ASSERT_GE(mock_ble_->get_written_data().size(), 1u);
+  EXPECT_EQ(vehicle_->pending_command_count(), 1u) << "A sent command waiting for its reply is still pending";
+
+  vehicle_->vcsec_poll();
+  EXPECT_EQ(vehicle_->pending_command_count(), 2u);
+
+  // A real disconnect fails every queued command
+  vehicle_->set_connected(false);
+  EXPECT_EQ(vehicle_->pending_command_count(), 0u);
+}
+
 // ============================================================================
 // Command Sending Tests
 // ============================================================================

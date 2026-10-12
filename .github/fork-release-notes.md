@@ -1,4 +1,17 @@
-## tesla-ble fork v5.2.0-dm.10: upstream fixes for stuck session requests, message buffers, per-domain request hash and key regeneration
+## tesla-ble v2026.10.12: pending command count; releases now tagged by date
+
+### Changed in v2026.10.12
+- **New naming.** Releases are tagged by date from now on (`vYYYY.M.D`), and `VERSION`,
+  `idf_component.yml` and `library.json` carry the same number. This library keeps the v5
+  API with PSA crypto, while upstream (yoziru/tesla-ble) moved to a new v6 API. It takes
+  upstream fixes selectively, so an upstream version number would no longer describe it.
+  The old `v5.2.0-dm.1` to `v5.2.0-dm.10` tags stay. Roll back: `v5.2.0-dm.10`.
+- **`Vehicle::pending_command_count()`** (new): the number of commands that are queued or
+  still waiting for their reply. A command stays counted until it completes or fails.
+  A host that shares the radio between cars can use it to avoid ending a car's turn
+  mid-command. It has the same name and meaning as in upstream v6.
+
+No change to commands, sessions or stored keys: no re-pairing.
 
 ### Changed in dm.10
 Four fixes from upstream (yoziru/tesla-ble), taken into the fork unchanged except where the fork already had its own code:
@@ -87,7 +100,7 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v5.2.0-dm.9
+        ref: v2026.10.12
 ```
 
 ### Branches and roll back

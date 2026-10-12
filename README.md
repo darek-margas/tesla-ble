@@ -13,7 +13,9 @@ The main purpose of this library is to locally manage charging of the vehicle to
 
 ## This fork
 
-Upstream `v5.2.0` and the upstream `main` commits after it (low power mode and keep accessory power actions), plus the changes below. Upstream has since merged most of the fixes and actions below (its PRs #90, #92-#95, and its own version of the reply check as #102); dm.10 takes four further upstream fixes in return (see Fixes). Each fork release is a tag `v5.2.0-dm.N`; the [fork release notes](.github/fork-release-notes.md) give the details and the roll-back tag for each step.
+An independent library derived from yoziru/tesla-ble `v5.2.0`, maintained for [esphome-tesla-ble-multi](https://github.com/darek-margas/esphome-tesla-ble-multi). Upstream has since merged most of the fixes and actions below (its PRs #90, #92-#95, and its own version of the reply check as #102) and moved on to a new v6 API; this library keeps the v5 API with PSA crypto (ESP-IDF 6 ready) and takes upstream fixes selectively (see Fixes).
+
+Releases are tagged by date, `vYYYY.M.D` (from `v2026.10.12`). Earlier releases were `v5.2.0-dm.1` to `v5.2.0-dm.10`; those tags stay. The [release notes](.github/fork-release-notes.md) give the details and the roll-back tag for each step.
 
 ### Use it
 
@@ -25,7 +27,7 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v5.2.0-dm.10
+        ref: v2026.10.12
 ```
 
 Targets: ESP32, ESP32-S3, ESP32-C3, ESP32-C6 and ESP32-C5.
@@ -43,6 +45,7 @@ Targets: ESP32, ESP32-S3, ESP32-C3, ESP32-C6 and ESP32-C5.
 - **A command resend is the identical message.** When a reply is lost, the command is resent as the same bytes instead of being rebuilt with a new counter, so the car sees a duplicate and a toggle (trunk, play / pause) is not carried out twice. (dm.4)
 - **A late reply to an earlier request logs at DEBUG**, not as a warning. (dm.9)
 - **From upstream** (yoziru/tesla-ble #96, #97, #98, #101): a session request stuck unanswered completes its command once (not twice), with an escalating time limit and the retry delay actually applied; outgoing messages are built in buffers sized for the largest possible message (were 256 bytes on the stack); the last request is kept per domain, so a late VCSEC reply is no longer checked against an infotainment request or the other way round; Regenerate key drops the sessions made with the old key. (dm.10)
+- **`Vehicle::pending_command_count()`**: commands queued or still waiting for their reply, so a host that shares the radio between cars does not end a car's turn mid-command (same name as upstream v6). (2026.10.12)
 
 **Added vehicle actions** (infotainment domain, message fields as in vehicle-command)
 
