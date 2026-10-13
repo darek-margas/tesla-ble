@@ -100,7 +100,11 @@ void TeslaBLE::Vehicle::set_connected(bool connected) {
       command_queue_.pop();
     }
 
+    // Nothing received on the old link may be handled after it: not a partial
+    // frame, nor a reply already decoded and waiting for the next loop() (it
+    // would meet reset sessions, or the next connection's commands).
     rx_buffer_.clear();
+    message_processor_->clear_queue();
   } else {
     LOG_INFO("Connected to vehicle");
   }
@@ -304,11 +308,24 @@ void TeslaBLE::Vehicle::process_authenticating_command_(const std::shared_ptr<Co
 void TeslaBLE::Vehicle::process_auth_response_waiting_command_(const std::shared_ptr<Command> &command) {
   auto now = std::chrono::steady_clock::now();
   // Session info request not answered yet: send the same bytes again (same
-  // request id, so whichever copy the car answers is accepted). The overall
-  // wait is still AUTH_RESPONSE_TIMEOUT from the first send.
+  // request id, so whichever copy the car answers is accepted). Once that id
+  // is older than CLOCK_SYNC_MAX_LATENCY an answer to it would be stale, so
+  // ask again with a new id. The overall wait is still AUTH_RESPONSE_TIMEOUT
+  // from the first send.
   if (command->current_auth_domain == command->auth_request_domain &&
       command->current_auth_domain != UniversalMessage_Domain_DOMAIN_BROADCAST && !command->auth_request.empty() &&
       command->auth_resends < MAX_AUTH_RESENDS && now - command->auth_resend_at >= TRANSPORT_RETRY_INTERVAL) {
+    if (request_age_(command->current_auth_domain) >= CLOCK_SYNC_MAX_LATENCY) {
+      std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
+      size_t len = buffer.size();
+      if (client_->build_session_info_request_message(command->current_auth_domain, buffer.data(), &len) != 0) {
+        mark_command_failed_(command, CommandError::build_failed("Session Info Request"));
+        return;
+      }
+      command->auth_request.assign(buffer.begin(), buffer.begin() + len);
+      note_request_built_(command->current_auth_domain);
+      LOG_DEBUG("Renewed %s Session Info Request (new request id)", domain_to_string(command->current_auth_domain));
+    }
     if (ble_adapter_->write(command->auth_request)) {
       command->auth_resends++;
       LOG_DEBUG("Resent %s Session Info Request (%d/%d)", domain_to_string(command->current_auth_domain),
@@ -397,6 +414,7 @@ void TeslaBLE::Vehicle::initiate_auth_for_domain_(const std::shared_ptr<Command>
     std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
     size_t len = buffer.size();
     if (client_->build_session_info_request_message(domain, buffer.data(), &len) == 0) {
+      note_request_built_(domain);
       std::vector<uint8_t> data(buffer.begin(), buffer.begin() + len);
       if (ble_adapter_->write(data)) {
         command->state = waiting_state;
@@ -481,6 +499,7 @@ void TeslaBLE::Vehicle::initiate_wake_sequence_(const std::shared_ptr<Command> &
   std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
   size_t len = buffer.size();
   if (client_->build_vcsec_action_message(VCSEC_RKEAction_E_RKE_ACTION_WAKE_VEHICLE, buffer.data(), &len) == 0) {
+    note_request_built_(UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY);
     std::vector<uint8_t> data(buffer.begin(), buffer.begin() + len);
     if (ble_adapter_->write(data)) {
       command->state = CommandState::AUTH_RESPONSE_WAITING;
@@ -567,6 +586,7 @@ void TeslaBLE::Vehicle::process_ready_command_(const std::shared_ptr<Command> &c
   std::array<uint8_t, UniversalMessage_RoutableMessage_size + FRAME_HEADER_SIZE> buffer{};
   size_t len = buffer.size();
   if (command->builder(client_.get(), buffer.data(), &len) == 0) {
+    note_request_built_(command->domain);
     std::vector<uint8_t> data(buffer.begin(), buffer.begin() + len);
     command->encoded_request = data;
     if (ble_adapter_->write(data)) {
@@ -750,8 +770,7 @@ void TeslaBLE::Vehicle::handle_message_(const UniversalMessage_RoutableMessage &
   if (msg.which_payload == UniversalMessage_RoutableMessage_session_info_tag) {
     handle_session_info_message_(msg);
     auto cmd = peek_command_();
-    if (has_session_error && cmd &&
-        (cmd->state == CommandState::WAITING_FOR_RESPONSE || cmd->state == CommandState::AUTH_RESPONSE_WAITING)) {
+    if (has_session_error && cmd && (cmd->awaiting_response() || cmd->state == CommandState::AUTH_RESPONSE_WAITING)) {
       LOG_INFO("Retrying command after session recovery");
       cmd->state = CommandState::IDLE;
       cmd->resend_encoded = false;
@@ -763,8 +782,7 @@ void TeslaBLE::Vehicle::handle_message_(const UniversalMessage_RoutableMessage &
     return;
   }
   auto cmd = peek_command_();
-  if (has_session_error && cmd &&
-      (cmd->state == CommandState::WAITING_FOR_RESPONSE || cmd->state == CommandState::AUTH_RESPONSE_WAITING)) {
+  if (has_session_error && cmd && (cmd->awaiting_response() || cmd->state == CommandState::AUTH_RESPONSE_WAITING)) {
     LOG_INFO("Transitioning to IDLE to trigger manual session recovery");
     cmd->state = CommandState::IDLE;
     cmd->resend_encoded = false;
@@ -795,6 +813,16 @@ void TeslaBLE::Vehicle::handle_session_info_message_(const UniversalMessage_Rout
   if (domain != UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY &&
       domain != UniversalMessage_Domain_DOMAIN_INFOTAINMENT) {
     LOG_ERROR("Could not determine valid domain for session info update");
+    return;
+  }
+
+  // Session info answers a request built more than CLOCK_SYNC_MAX_LATENCY ago:
+  // its clock is too old to trust. Ignore it; an unanswered session request is
+  // renewed with a new id (process_auth_response_waiting_command_).
+  const auto age = request_age_(domain);
+  if (age > CLOCK_SYNC_MAX_LATENCY) {
+    LOG_DEBUG("Ignoring stale session info for %s (%lld ms after its request)", domain_to_string(domain),
+              static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(age).count()));
     return;
   }
 
@@ -938,7 +966,7 @@ void TeslaBLE::Vehicle::handle_vcsec_message_(const UniversalMessage_RoutableMes
       log_vcsec_command_status(TESLA_LOG_TAG, &vcsec_msg.sub_message.commandStatus);
       if (auto cmd = peek_command_()) {
         if (cmd->domain == UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY &&
-            (cmd->state == CommandState::WAITING_FOR_RESPONSE || cmd->state == CommandState::AUTH_RESPONSE_WAITING)) {
+            (cmd->awaiting_response() || cmd->state == CommandState::AUTH_RESPONSE_WAITING)) {
           mark_command_completed_(cmd);
         }
       }
@@ -1031,8 +1059,7 @@ void TeslaBLE::Vehicle::handle_carserver_message_(const UniversalMessage_Routabl
     }
   }
   auto cmd = peek_command_();
-  if (cmd && cmd->domain == UniversalMessage_Domain_DOMAIN_INFOTAINMENT &&
-      cmd->state == CommandState::WAITING_FOR_RESPONSE) {
+  if (cmd && cmd->domain == UniversalMessage_Domain_DOMAIN_INFOTAINMENT && cmd->awaiting_response()) {
     if (response.has_actionStatus) {
       bool already_set = response.actionStatus.has_result_reason &&
                          response.actionStatus.result_reason.which_reason == CarServer_ResultReason_plain_text_tag &&
@@ -1067,6 +1094,21 @@ void TeslaBLE::Vehicle::handle_authentication_response_(UniversalMessage_Domain 
   }
 
   mark_command_failed_(cmd, CommandError::authentication_failed("auth response", true));
+}
+
+void Vehicle::note_request_built_(UniversalMessage_Domain domain) {
+  const auto now = std::chrono::steady_clock::now();
+  if (domain == UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY) {
+    request_built_at_vcsec_ = now;
+  } else if (domain == UniversalMessage_Domain_DOMAIN_INFOTAINMENT) {
+    request_built_at_infotainment_ = now;
+  }
+}
+
+std::chrono::steady_clock::duration Vehicle::request_age_(UniversalMessage_Domain domain) const {
+  const auto built = domain == UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY ? request_built_at_vcsec_
+                                                                               : request_built_at_infotainment_;
+  return std::chrono::steady_clock::now() - built;
 }
 
 std::string Vehicle::get_session_key_(UniversalMessage_Domain domain) {
@@ -1708,7 +1750,7 @@ void TeslaBLE::Vehicle::handle_signed_message_error_(const UniversalMessage_Rout
   }
 
   auto cmd = peek_command_();
-  if (!has_session_error && cmd && cmd->state == CommandState::WAITING_FOR_RESPONSE) {
+  if (!has_session_error && cmd && cmd->awaiting_response()) {
     mark_command_failed_(cmd, CommandError::authentication_failed("signed message"));
   }
 }

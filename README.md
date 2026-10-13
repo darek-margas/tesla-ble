@@ -27,7 +27,7 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v2026.10.12
+        ref: v2026.10.13
 ```
 
 Targets: ESP32, ESP32-S3, ESP32-C3, ESP32-C6 and ESP32-C5.
@@ -46,6 +46,7 @@ Targets: ESP32, ESP32-S3, ESP32-C3, ESP32-C6 and ESP32-C5.
 - **A late reply to an earlier request logs at DEBUG**, not as a warning. (dm.9)
 - **From upstream** (yoziru/tesla-ble #96, #97, #98, #101): a session request stuck unanswered completes its command once (not twice), with an escalating time limit and the retry delay actually applied; outgoing messages are built in buffers sized for the largest possible message (were 256 bytes on the stack); the last request is kept per domain, so a late VCSEC reply is no longer checked against an infotainment request or the other way round; Regenerate key drops the sessions made with the old key. (dm.10)
 - **`Vehicle::pending_command_count()`**: commands queued or still waiting for their reply, so a host that shares the radio between cars does not end a car's turn mid-command (same name as upstream v6). (2026.10.12)
+- **Stricter session handling** (after upstream v6): session info answering a request built more than 4 s earlier is ignored (its clock is stale), and a session request still unanswered then is renewed with a new id instead of resent; a fault or reply that arrives while a command waits out its retry backoff still belongs to it (a session fault rebuilds the request, a refusal fails it, an answer completes it); replies decoded but not yet handled when the link drops are discarded. (2026.10.13)
 
 **Added vehicle actions** (infotainment domain, message fields as in vehicle-command)
 

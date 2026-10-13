@@ -1,3 +1,25 @@
+## tesla-ble v2026.10.13: stricter session handling, faults during retry backoff, clean disconnect
+
+### Fixed in v2026.10.13
+Three changes ported by hand from upstream (yoziru/tesla-ble v6) onto this library's v5 API and PSA crypto:
+- **Session info must be fresh.** A session answer is trusted only within 4 s
+  (`CLOCK_SYNC_MAX_LATENCY`, as in Tesla's vehicle-command) of building the request it
+  answers, because it carries the car's clock. A later answer is ignored. A session request
+  still unanswered after 4 s is renewed with a new request id, instead of resending the same
+  bytes. The overall auth timeout still counts from the first send.
+- **A late fault or reply during the retry backoff still belongs to its command.** After a
+  reply timeout, a command waits out its backoff before the identical resend, and the car's
+  late answer was ignored in that window. Now:
+  - a session fault (e.g. TIME_EXPIRED) drops the queued resend, which carries an old
+    counter, and the request is rebuilt under a fresh session;
+  - a refusal fails the command at once;
+  - a VCSEC or infotainment answer completes it.
+  This is `Command::awaiting_response()`, as upstream.
+- **A disconnect discards replies that were already decoded but not yet handled**, as well
+  as partial frames. Before, they were processed after the reconnect, against reset sessions.
+
+No change to commands, stored sessions or keys: no re-pairing. Roll back: `v2026.10.12`.
+
 ## tesla-ble v2026.10.12: pending command count; releases now tagged by date
 
 ### Changed in v2026.10.12
@@ -100,7 +122,7 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v2026.10.12
+        ref: v2026.10.13
 ```
 
 ### Branches and roll back

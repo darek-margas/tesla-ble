@@ -157,6 +157,13 @@ struct Command {
   // Domain context for consolidated state handling
   UniversalMessage_Domain current_auth_domain;
 
+  // Sent and not yet answered: waiting for the reply, or between a reply
+  // timeout and its identical resend (READY with resend_encoded, during the
+  // retry backoff). A late fault from the car still belongs to this command.
+  bool awaiting_response() const {
+    return state == CommandState::WAITING_FOR_RESPONSE || (state == CommandState::READY && resend_encoded);
+  }
+
   Command(UniversalMessage_Domain d, std::string n, std::function<int(Client *, uint8_t *, size_t *)> b,
           OperationResultCallback cb = nullptr, WakePolicy wake = WakePolicy::WAKE_IF_NEEDED,
           OperationPhaseCallback phase_cb = nullptr)
@@ -391,6 +398,15 @@ class Vehicle {
                         const UniversalMessage_RoutableMessage_session_info_t &session_info);
   void clear_stored_session_(UniversalMessage_Domain domain);
   std::string get_session_key_(UniversalMessage_Domain domain);
+
+  // When the request whose id the car echoes was built, per domain. Session
+  // info answering it is only trusted within CLOCK_SYNC_MAX_LATENCY of that
+  // (it carries the car's clock); a session request still unanswered then is
+  // renewed with a new id instead of resent (as in vehicle-command).
+  std::chrono::steady_clock::time_point request_built_at_vcsec_{};
+  std::chrono::steady_clock::time_point request_built_at_infotainment_{};
+  void note_request_built_(UniversalMessage_Domain domain);
+  std::chrono::steady_clock::duration request_age_(UniversalMessage_Domain domain) const;
   void reset_all_sessions_and_connection_();
   bool attempt_buffer_recovery_(int &msg_len);
   void log_timeout_message_(const std::string &message, const std::shared_ptr<Command> &command);

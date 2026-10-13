@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 using TeslaBLE::Command;
@@ -1836,6 +1837,144 @@ TEST_F(VehicleTest, ErrorTimeExpiredTriggersSessionResetAndReAuth) {
   // the dummy command body; the recovery itself is the important part)
   auto final_writes = mock_ble_->get_written_data();
   ASSERT_GT(final_writes.size(), recovery_writes.size()) << "Command should be re-sent after session recovery";
+}
+
+// A fault for a command whose reply timed out, arriving while it waits out the
+// retry backoff (READY with an identical resend queued) - see awaiting_response().
+
+// Helper: a signed-message error from `domain` with `fault` and no payload.
+static std::vector<uint8_t> make_signed_fault_message(UniversalMessage_Domain domain,
+                                                      UniversalMessage_MessageFault_E fault) {
+  UniversalMessage_RoutableMessage msg = UniversalMessage_RoutableMessage_init_default;
+  msg.has_from_destination = true;
+  msg.from_destination.which_sub_destination = UniversalMessage_Destination_domain_tag;
+  msg.from_destination.sub_destination.domain = domain;
+  msg.has_signedMessageStatus = true;
+  msg.signedMessageStatus.operation_status = UniversalMessage_OperationStatus_E_OPERATIONSTATUS_ERROR;
+  msg.signedMessageStatus.signed_message_fault = fault;
+  return frame_universal_message(msg);
+}
+
+// Sends a VCSEC test command, establishes its session, lets the reply time out
+// and returns the command waiting in the retry backoff.
+static std::shared_ptr<Command> command_in_retry_backoff(Vehicle *vehicle, MockBleAdapter *ble,
+                                                         const std::function<void(bool)> &on_complete) {
+  vehicle->set_connected(true);
+  vehicle->send_command_bool(
+      UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY, "Test Poll",
+      [](Client *, uint8_t *buffer, size_t *len) {
+        *len = 4;
+        std::fill_n(buffer, 4, 0x42);
+        return TeslaBLE_Status_E_OK;
+      },
+      on_complete, false);
+  vehicle->loop();
+  auto writes = ble->get_written_data();
+  if (writes.empty())
+    return nullptr;
+  size_t uuid_len = 0;
+  auto uuid = extract_request_uuid(writes[0], &uuid_len);
+  vehicle->on_rx_data(make_vcsec_session_info_with_valid_hmac(uuid.data(), uuid_len));
+  vehicle->loop();
+
+  auto &queue = vehicle->get_command_queue_for_testing();
+  if (queue.empty())
+    return nullptr;
+  auto command = queue.front();
+  if (command->state != CommandState::WAITING_FOR_RESPONSE)
+    return nullptr;
+  // No reply within the transport retry interval: retry with backoff
+  command->last_tx_at = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+  vehicle->loop();
+  return command;
+}
+
+TEST_F(VehicleTest, SessionFaultDuringRetryBackoffRebuildsInsteadOfResending) {
+  auto command = command_in_retry_backoff(vehicle_.get(), mock_ble_.get(), nullptr);
+  ASSERT_NE(command, nullptr);
+  ASSERT_EQ(command->state, CommandState::READY);
+  ASSERT_TRUE(command->resend_encoded);
+  ASSERT_TRUE(command->awaiting_response());
+
+  // The car's late answer: the session expired. The queued identical resend
+  // carries the old counter, so it must be dropped and the request rebuilt
+  // under a fresh session.
+  vehicle_->on_rx_data(make_error_time_expired_message(UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY));
+  vehicle_->loop();  // handles the fault; the retry backoff still holds the command
+  EXPECT_EQ(command->state, CommandState::IDLE);
+  EXPECT_FALSE(command->resend_encoded);
+}
+
+TEST_F(VehicleTest, DisconnectDropsRepliesDecodedButNotYetHandled) {
+  int handled = 0;
+  vehicle_->set_message_callback([&](const UniversalMessage_RoutableMessage &) { ++handled; });
+  vehicle_->set_connected(true);
+
+  // A complete reply arrives: decoded now, handled on the next loop().
+  vehicle_->on_rx_data(make_signed_fault_message(UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY,
+                                                 UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_BUSY));
+  // The link drops before that loop: the reply belongs to the old link.
+  vehicle_->set_connected(false);
+  vehicle_->set_connected(true);
+  vehicle_->loop();
+  EXPECT_EQ(handled, 0);
+
+  // A reply on the new link is handled as usual.
+  vehicle_->on_rx_data(make_signed_fault_message(UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY,
+                                                 UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_BUSY));
+  vehicle_->loop();
+  EXPECT_EQ(handled, 1);
+}
+
+TEST_F(VehicleTest, StaleSessionInfoIsIgnoredAndTheRequestRenewed) {
+  vehicle_->set_connected(true);
+  vehicle_->vcsec_poll();
+  vehicle_->loop();
+  const auto request = mock_ble_->get_written_data().back();
+  size_t uuid_len = 0;
+  const auto uuid = extract_request_uuid(request, &uuid_len);
+  ASSERT_EQ(uuid_len, 16u);
+  const auto response = make_vcsec_session_info_with_valid_hmac(uuid.data(), uuid_len);
+
+  // A valid answer, but to a challenge older than the latency window: its
+  // clock is too old to trust, so the session is not updated.
+  std::this_thread::sleep_for(Vehicle::CLOCK_SYNC_MAX_LATENCY + std::chrono::milliseconds(100));
+  vehicle_->on_rx_data(response);
+  vehicle_->loop();
+  EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 0u);
+  EXPECT_EQ(vehicle_->pending_command_count(), 1u) << "The command keeps waiting for a fresh session";
+
+  // The same loop renewed the unanswered session request: a new request id.
+  const auto renewed = mock_ble_->get_written_data().back();
+  size_t renewed_len = 0;
+  const auto renewed_uuid = extract_request_uuid(renewed, &renewed_len);
+  ASSERT_EQ(renewed_len, 16u);
+  EXPECT_NE(renewed_uuid, uuid);
+
+  // A prompt answer to the renewed request is accepted.
+  vehicle_->on_rx_data(make_vcsec_session_info_with_valid_hmac(renewed_uuid.data(), renewed_len));
+  vehicle_->loop();
+  EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 1u);
+}
+
+TEST_F(VehicleTest, CommandFaultDuringRetryBackoffFailsTheCommand) {
+  bool callback_called = false;
+  bool succeeded = true;
+  auto command = command_in_retry_backoff(vehicle_.get(), mock_ble_.get(), [&](bool ok) {
+    callback_called = true;
+    succeeded = ok;
+  });
+  ASSERT_NE(command, nullptr);
+  ASSERT_TRUE(command->awaiting_response());
+
+  // A fault that is not about the session: the car answered and refused, so the
+  // command fails now instead of being resent.
+  vehicle_->on_rx_data(make_signed_fault_message(UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY,
+                                                 UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_WRONG_PERSONALIZATION));
+  vehicle_->loop();
+  EXPECT_TRUE(callback_called);
+  EXPECT_FALSE(succeeded);
+  EXPECT_EQ(vehicle_->pending_command_count(), 0u);
 }
 
 // ============================================================================
