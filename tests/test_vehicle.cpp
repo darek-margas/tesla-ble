@@ -1957,6 +1957,44 @@ TEST_F(VehicleTest, StaleSessionInfoIsIgnoredAndTheRequestRenewed) {
   EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 1u);
 }
 
+TEST_F(VehicleTest, LateAnswerToRenewedSessionRequestDoesNotFailTheNewOne) {
+  bool callback_called = false;
+  vehicle_->set_connected(true);
+  vehicle_->send_command_bool(
+      UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY, "Test Poll",
+      [](Client *, uint8_t *buffer, size_t *len) {
+        *len = 4;
+        std::fill_n(buffer, 4, 0x42);
+        return TeslaBLE_Status_E_OK;
+      },
+      [&](bool) { callback_called = true; }, false);
+  vehicle_->loop();
+  size_t first_len = 0;
+  const auto first_uuid = extract_request_uuid(mock_ble_->get_written_data().back(), &first_len);
+  ASSERT_EQ(first_len, 16u);
+
+  // Request A unanswered for 4 s: renewed as request B with a new id.
+  std::this_thread::sleep_for(Vehicle::CLOCK_SYNC_MAX_LATENCY + std::chrono::milliseconds(100));
+  vehicle_->loop();
+  size_t renewed_len = 0;
+  const auto renewed_uuid = extract_request_uuid(mock_ble_->get_written_data().back(), &renewed_len);
+  ASSERT_EQ(renewed_len, 16u);
+  ASSERT_NE(renewed_uuid, first_uuid);
+
+  // The car's delayed answer to A arrives now (B is fresh, so the age check
+  // alone would let it through to a verification against B's id).
+  vehicle_->on_rx_data(make_vcsec_session_info_with_valid_hmac(first_uuid.data(), first_len));
+  vehicle_->loop();
+  EXPECT_FALSE(callback_called) << "A late answer to A must not fail the command waiting for B";
+  EXPECT_EQ(vehicle_->pending_command_count(), 1u);
+  EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 0u);
+
+  // B's answer still establishes the session.
+  vehicle_->on_rx_data(make_vcsec_session_info_with_valid_hmac(renewed_uuid.data(), renewed_len));
+  vehicle_->loop();
+  EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 1u);
+}
+
 TEST_F(VehicleTest, CommandFaultDuringRetryBackoffFailsTheCommand) {
   bool callback_called = false;
   bool succeeded = true;

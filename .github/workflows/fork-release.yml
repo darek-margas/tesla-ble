@@ -1,11 +1,12 @@
 name: Fork release
 
 # Releases of the darek-margas fork, from branch "multicar" only.
-# Bump FORK_VERSION (YYYY.M.D, e.g. 2026.10.12; v5.2.0-dm.10 was the last of the old
+# Bump FORK_VERSION (YYYY.M.N: year, month, a counting release number, e.g. 2026.10.14;
+# v5.2.0-dm.10 was the last of the old
 # scheme) and update .github/fork-release-notes.md;
 # the push runs the tests and, if they pass, creates tag v<FORK_VERSION> and
 # a GitHub release. VERSION, idf_component.yml and library.json carry the same
-# number (CMake needs X.Y.Z, which YYYY.M.D is).
+# number (CMake and the ESP-IDF manifest need X.Y.Z).
 
 on:
   push:

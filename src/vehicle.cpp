@@ -816,6 +816,21 @@ void TeslaBLE::Vehicle::handle_session_info_message_(const UniversalMessage_Rout
     return;
   }
 
+  // Session info echoes the id of the request it answers. One for an earlier
+  // request (superseded by a renewal, or by a newer request to this domain)
+  // arriving late is not ours to verify: checking it against the current
+  // request would fail authentication of a request still in flight.
+  if (msg.request_uuid.size > 0) {
+    pb_byte_t current_uuid[16] = {0};
+    size_t current_uuid_length = sizeof(current_uuid);
+    if (client_->get_last_request_uuid(domain, current_uuid, &current_uuid_length) &&
+        (msg.request_uuid.size != current_uuid_length ||
+         !std::equal(current_uuid, current_uuid + current_uuid_length, msg.request_uuid.bytes))) {
+      LOG_DEBUG("Ignoring session info for %s answering a superseded request", domain_to_string(domain));
+      return;
+    }
+  }
+
   // Session info answers a request built more than CLOCK_SYNC_MAX_LATENCY ago:
   // its clock is too old to trust. Ignore it; an unanswered session request is
   // renewed with a new id (process_auth_response_waiting_command_).

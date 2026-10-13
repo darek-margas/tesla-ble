@@ -1,3 +1,21 @@
+## tesla-ble v2026.10.14: a late answer to a renewed session request no longer fails the new one
+
+### Fixed in v2026.10.14
+- **A late session answer could fail authentication.** Since v2026.10.13, a session request
+  unanswered for 4 s is renewed with a new id. If the car's answer to the *old* request then
+  arrived, it passed the age check (which looks at the newest request), failed verification
+  against the new request's id, and failed the command, even though the answer to the new
+  request was still on its way. That's most likely on a weak link. Session info echoes the id
+  of the request it answers, so one for an earlier request is now ignored quietly. A failed
+  verification of an answer to the *current* request still fails, as before. Regression test
+  included.
+
+**Version numbers** are now `vYYYY.M.N`: year, month and a release number that counts up. The
+first releases happened to match the day. A second release on 13 October needed a new
+number, and the ESP-IDF manifest allows only three parts.
+
+No change to commands, stored sessions or keys: no re-pairing. Roll back: `v2026.10.13`.
+
 ## tesla-ble v2026.10.13: stricter session handling, faults during retry backoff, clean disconnect
 
 ### Fixed in v2026.10.13
@@ -122,7 +140,7 @@ esp32:
     components:
       - name: tesla-ble
         source: https://github.com/darek-margas/tesla-ble.git
-        ref: v2026.10.13
+        ref: v2026.10.14
 ```
 
 ### Branches and roll back
