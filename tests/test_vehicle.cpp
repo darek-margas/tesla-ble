@@ -75,7 +75,8 @@ std::array<pb_byte_t, 16> extract_request_uuid(const std::vector<uint8_t> &frame
 }
 
 std::vector<uint8_t> make_session_info_with_valid_hmac(const pb_byte_t *request_uuid, size_t request_uuid_length,
-                                                       const pb_byte_t *mock_message, size_t mock_message_length) {
+                                                       const pb_byte_t *mock_message, size_t mock_message_length,
+                                                       bool echo_request_uuid = true) {
   if (!request_uuid || request_uuid_length == 0) {
     return {};
   }
@@ -106,6 +107,9 @@ std::vector<uint8_t> make_session_info_with_valid_hmac(const pb_byte_t *request_
 
   message.request_uuid.size = request_uuid_length;
   std::copy(request_uuid, request_uuid + request_uuid_length, message.request_uuid.bytes);
+  if (!echo_request_uuid) {
+    message.request_uuid.size = 0;  // still signed for request_uuid, just not echoed
+  }
 
   size_t vin_length = 0;
   while (TEST_VIN[vin_length] != '\0') {
@@ -1986,13 +1990,81 @@ TEST_F(VehicleTest, LateAnswerToRenewedSessionRequestDoesNotFailTheNewOne) {
   vehicle_->on_rx_data(make_vcsec_session_info_with_valid_hmac(first_uuid.data(), first_len));
   vehicle_->loop();
   EXPECT_FALSE(callback_called) << "A late answer to A must not fail the command waiting for B";
-  EXPECT_EQ(vehicle_->pending_command_count(), 1u);
+  ASSERT_EQ(vehicle_->pending_command_count(), 1u);
+  EXPECT_EQ(vehicle_->get_command_queue_for_testing().front()->state, CommandState::AUTH_RESPONSE_WAITING)
+      << "Still waiting for the answer to B";
   EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 0u);
 
   // B's answer still establishes the session.
   vehicle_->on_rx_data(make_vcsec_session_info_with_valid_hmac(renewed_uuid.data(), renewed_len));
   vehicle_->loop();
   EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 1u);
+}
+
+// Session info for the domain's current request, answered promptly. Returns the
+// request id; the command is left waiting for the answer.
+static std::array<pb_byte_t, 16> await_vcsec_session_answer(Vehicle *vehicle, MockBleAdapter *ble) {
+  vehicle->set_connected(true);
+  vehicle->vcsec_poll();
+  vehicle->loop();
+  size_t uuid_len = 0;
+  return extract_request_uuid(ble->get_written_data().back(), &uuid_len);
+}
+
+// VCSEC session info signed for `uuid` that does not echo it.
+static std::vector<uint8_t> vcsec_answer_without_echo(const std::array<pb_byte_t, 16> &uuid) {
+  return make_session_info_with_valid_hmac(uuid.data(), uuid.size(), MOCK_VCSEC_MESSAGE, sizeof(MOCK_VCSEC_MESSAGE),
+                                           /*echo_request_uuid=*/false);
+}
+
+TEST_F(VehicleTest, SessionInfoEchoingAnotherRequestIdIsIgnored) {
+  const auto uuid = await_vcsec_session_answer(vehicle_.get(), mock_ble_.get());
+  // Validly signed, but for (and echoing) a request that is not the current one
+  std::array<pb_byte_t, 16> other = uuid;
+  other[0] ^= 0xFF;
+  vehicle_->on_rx_data(make_vcsec_session_info_with_valid_hmac(other.data(), other.size()));
+  vehicle_->loop();
+  EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 0u);
+  ASSERT_EQ(vehicle_->pending_command_count(), 1u) << "Ignored, not an authentication failure";
+  EXPECT_EQ(vehicle_->get_command_queue_for_testing().front()->state, CommandState::AUTH_RESPONSE_WAITING);
+}
+
+TEST_F(VehicleTest, SessionInfoWithoutEchoedIdIsCheckedByItsSignature) {
+  const auto uuid = await_vcsec_session_answer(vehicle_.get(), mock_ble_.get());
+  // No request id echoed: the HMAC, computed over the current request's id,
+  // decides. Signed for the current request, it is accepted.
+  vehicle_->on_rx_data(vcsec_answer_without_echo(uuid));
+  vehicle_->loop();
+  EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 1u);
+}
+
+TEST_F(VehicleTest, SessionInfoWithoutEchoedIdSignedForAnotherRequestFailsAuth) {
+  bool callback_called = false;
+  bool succeeded = true;
+  vehicle_->set_connected(true);
+  vehicle_->send_command_bool(
+      UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY, "Test Poll",
+      [](Client *, uint8_t *buffer, size_t *len) {
+        *len = 4;
+        std::fill_n(buffer, 4, 0x42);
+        return TeslaBLE_Status_E_OK;
+      },
+      [&](bool ok) {
+        callback_called = true;
+        succeeded = ok;
+      },
+      false);
+  vehicle_->loop();
+  size_t uuid_len = 0;
+  auto other = extract_request_uuid(mock_ble_->get_written_data().back(), &uuid_len);
+  other[0] ^= 0xFF;
+  // No echoed id, and the signature is over another request's id: not
+  // attributable, so it is an authentication failure as before.
+  vehicle_->on_rx_data(vcsec_answer_without_echo(other));
+  vehicle_->loop();
+  EXPECT_TRUE(callback_called);
+  EXPECT_FALSE(succeeded);
+  EXPECT_EQ(mock_storage_->get_storage().count("session_vcsec"), 0u);
 }
 
 TEST_F(VehicleTest, CommandFaultDuringRetryBackoffFailsTheCommand) {
