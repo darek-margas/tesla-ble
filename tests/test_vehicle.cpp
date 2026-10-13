@@ -1969,8 +1969,8 @@ TEST_F(VehicleTest, CommandFaultDuringRetryBackoffFailsTheCommand) {
 
   // A fault that is not about the session: the car answered and refused, so the
   // command fails now instead of being resent.
-  vehicle_->on_rx_data(make_signed_fault_message(UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY,
-                                                 UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_WRONG_PERSONALIZATION));
+  const auto refusal = UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_WRONG_PERSONALIZATION;
+  vehicle_->on_rx_data(make_signed_fault_message(UniversalMessage_Domain_DOMAIN_VEHICLE_SECURITY, refusal));
   vehicle_->loop();
   EXPECT_TRUE(callback_called);
   EXPECT_FALSE(succeeded);
